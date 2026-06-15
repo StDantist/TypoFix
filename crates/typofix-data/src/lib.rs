@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use thiserror::Error;
-use typofix_core::{KeyCap, Layout, LayoutId};
+use typofix_core::{Dictionary, KeyCap, Layout, LayoutId, NgramModel};
 
 /// Вбудовані TOML-джерела розкладок (компілюються в бінар).
 const UK_TOML: &str = include_str!("../../../data/layouts/uk.toml");
@@ -158,6 +158,154 @@ pub fn load_layout(id: &str, override_dir: Option<&Path>) -> Result<Layout, Layo
     embedded_layout(id)
 }
 
+// ===========================================================================
+// LM (n-gram) і словник (FST): тренування/побудова, серіалізація, завантаження.
+// ===========================================================================
+
+/// Вбудовані **зразки** для розробки й тестів (committed, малі — кілька КБ).
+/// Реальні великі моделі/словники генеруються окремо й кладуться у
+/// `data/lm/*.bin` / `data/dicts/*.fst` (gitignored). Див. follow-up у
+/// `data/CLAUDE.md`.
+const UK_SAMPLE_CORPUS: &str = include_str!("../../../data/samples/uk.corpus.txt");
+const EN_SAMPLE_CORPUS: &str = include_str!("../../../data/samples/en.corpus.txt");
+const UK_SAMPLE_WORDS: &str = include_str!("../../../data/samples/uk.words.txt");
+const EN_SAMPLE_WORDS: &str = include_str!("../../../data/samples/en.words.txt");
+
+/// Помилки роботи з LM/словниками.
+#[derive(Debug, Error)]
+pub enum ModelError {
+    /// Не вдалося прочитати/записати файл.
+    #[error("IO {path}: {source}")]
+    Io {
+        /// Шлях.
+        path: PathBuf,
+        /// Першопричина.
+        source: std::io::Error,
+    },
+    /// Помилка (де)серіалізації LM (bincode).
+    #[error("bincode (де)серіалізація LM: {0}")]
+    Bincode(#[from] bincode::Error),
+    /// Помилка FST (побудова/читання словника).
+    #[error("FST: {0}")]
+    Fst(#[from] fst::Error),
+    /// Запит на невідому вбудовану мову зразка.
+    #[error("невідомий вбудований зразок для мови: '{0}'")]
+    UnknownSample(String),
+}
+
+// --- LM --------------------------------------------------------------------
+
+/// Натренувати n-gram модель із сирого тексту (тонка обгортка над core).
+///
+/// Цей самий шлях з'їсть і великий корпус — достатньо передати більший `corpus`.
+pub fn train_lm(corpus: &str, order: usize, k: f64) -> NgramModel {
+    NgramModel::train(corpus, order, k)
+}
+
+/// Серіалізувати модель у компактні байти (`.bin`).
+pub fn serialize_lm(model: &NgramModel) -> Result<Vec<u8>, ModelError> {
+    Ok(bincode::serialize(model)?)
+}
+
+/// Десеріалізувати модель із байтів `.bin`.
+pub fn deserialize_lm(bytes: &[u8]) -> Result<NgramModel, ModelError> {
+    Ok(bincode::deserialize(bytes)?)
+}
+
+/// Записати модель у файл `.bin`.
+pub fn save_lm(model: &NgramModel, path: &Path) -> Result<(), ModelError> {
+    let bytes = serialize_lm(model)?;
+    std::fs::write(path, bytes).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Завантажити модель із конкретного файлу `.bin`.
+pub fn load_lm_file(path: &Path) -> Result<NgramModel, ModelError> {
+    let bytes = std::fs::read(path).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    deserialize_lm(&bytes)
+}
+
+/// Натренувати модель із вбудованого зразка корпусу (детерміновано).
+pub fn sample_lm(lang: &str) -> Result<NgramModel, ModelError> {
+    let corpus = match lang {
+        "uk" => UK_SAMPLE_CORPUS,
+        "en" => EN_SAMPLE_CORPUS,
+        other => return Err(ModelError::UnknownSample(other.to_string())),
+    };
+    Ok(NgramModel::train(
+        corpus,
+        typofix_core::lm::DEFAULT_ORDER,
+        typofix_core::lm::DEFAULT_K,
+    ))
+}
+
+/// Завантажити LM: з `override_dir/{lang}.bin`, якщо є, інакше — з вбудованого
+/// зразка. (Доки немає реальних `.bin`, зразок забезпечує наскрізну роботу.)
+pub fn load_lm(lang: &str, override_dir: Option<&Path>) -> Result<NgramModel, ModelError> {
+    if let Some(dir) = override_dir {
+        let candidate = dir.join(format!("{lang}.bin"));
+        if candidate.exists() {
+            return load_lm_file(&candidate);
+        }
+    }
+    sample_lm(lang)
+}
+
+// --- Словник (FST) ---------------------------------------------------------
+
+/// Побудувати FST-словник зі списку слів (тонка обгортка над core).
+pub fn build_dict<I, S>(words: I) -> Result<Dictionary, ModelError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    Ok(Dictionary::from_words(words)?)
+}
+
+/// Записати словник у файл `.fst`.
+pub fn save_dict(dict: &Dictionary, path: &Path) -> Result<(), ModelError> {
+    std::fs::write(path, dict.as_bytes()).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Завантажити словник із конкретного файлу `.fst`.
+pub fn load_dict_file(path: &Path) -> Result<Dictionary, ModelError> {
+    let bytes = std::fs::read(path).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(Dictionary::from_bytes(bytes)?)
+}
+
+/// Побудувати словник із вбудованого зразка списку слів (одне слово на рядок).
+pub fn sample_dict(lang: &str) -> Result<Dictionary, ModelError> {
+    let list = match lang {
+        "uk" => UK_SAMPLE_WORDS,
+        "en" => EN_SAMPLE_WORDS,
+        other => return Err(ModelError::UnknownSample(other.to_string())),
+    };
+    build_dict(list.lines().map(str::trim).filter(|l| !l.is_empty()))
+}
+
+/// Завантажити словник: з `override_dir/{lang}.fst`, якщо є, інакше — з
+/// вбудованого зразка слів.
+pub fn load_dict(lang: &str, override_dir: Option<&Path>) -> Result<Dictionary, ModelError> {
+    if let Some(dir) = override_dir {
+        let candidate = dir.join(format!("{lang}.fst"));
+        if candidate.exists() {
+            return load_dict_file(&candidate);
+        }
+    }
+    sample_dict(lang)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +364,60 @@ mod tests {
         // Неіснуючий каталог → fallback на вбудовану без помилки.
         let uk = load_layout("uk", Some(Path::new("definitely/missing/dir"))).unwrap();
         assert_eq!(uk.id().as_str(), "uk");
+    }
+
+    // --- LM ----------------------------------------------------------------
+
+    #[test]
+    fn sample_lm_trains_and_distinguishes_languages() {
+        let uk = sample_lm("uk").unwrap();
+        let en = sample_lm("en").unwrap();
+        assert!(!uk.is_empty() && !en.is_empty());
+        // Зразок дає консистентну модель: реальні слова правдоподібніші за шум
+        // у відповідній мові.
+        assert!(uk.score("привіт") > uk.score("ghbdsn"));
+        assert!(en.score("hello") > en.score("привіт"));
+    }
+
+    #[test]
+    fn lm_bincode_roundtrip_preserves_scores() {
+        let uk = sample_lm("uk").unwrap();
+        let bytes = serialize_lm(&uk).unwrap();
+        let restored = deserialize_lm(&bytes).unwrap();
+        // Повна рівність моделі + однакові бали.
+        assert_eq!(restored, uk);
+        assert_eq!(restored.score("привіт"), uk.score("привіт"));
+    }
+
+    #[test]
+    fn unknown_sample_lang_errors() {
+        assert!(matches!(sample_lm("xx"), Err(ModelError::UnknownSample(_))));
+        assert!(matches!(
+            sample_dict("xx"),
+            Err(ModelError::UnknownSample(_))
+        ));
+    }
+
+    // --- Словник (FST) -----------------------------------------------------
+
+    #[test]
+    fn sample_dict_contains_expected_words() {
+        let uk = sample_dict("uk").unwrap();
+        assert!(uk.contains("привіт"));
+        assert!(uk.contains("світ"));
+        assert!(uk.contains("сім'я"));
+        assert!(!uk.contains("ghbdsn"));
+
+        let en = sample_dict("en").unwrap();
+        assert!(en.contains("hello"));
+        assert!(!en.contains("привіт"));
+    }
+
+    #[test]
+    fn dict_fst_bytes_roundtrip() {
+        let uk = sample_dict("uk").unwrap();
+        let restored = Dictionary::from_bytes(uk.as_bytes().to_vec()).unwrap();
+        assert!(restored.contains("привіт"));
+        assert_eq!(restored.len(), uk.len());
     }
 }

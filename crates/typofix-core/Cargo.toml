@@ -8,6 +8,10 @@ description = "Чиста детермінована логіка рішень T
 
 [dependencies]
 typofix-platform.workspace = true
+# FST-словник (dict). serde — лише derive для серіалізації n-gram моделі (lm);
+# це чисті дані, не IO, тож не порушує правил чистоти core.
+fst.workspace = true
+serde = { workspace = true }
 
 [dev-dependencies]
 typofix-platform-virtual.workspace = true

@@ -11,6 +11,9 @@ typofix-core.workspace = true
 serde = { workspace = true }
 toml = { workspace = true }
 thiserror = { workspace = true }
+# Серіалізація n-gram LM (.bin) і FST-словників (.fst).
+bincode = { workspace = true }
+fst = { workspace = true }
 
 [lints]
 workspace = true

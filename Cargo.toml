@@ -25,6 +25,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Парсинг TOML-розкладок (data/layouts/*.toml). Потрібен лише typofix-data.
 toml = "0.8"
+# FST-словники (typofix-core::dict будує/читає; typofix-data зберігає/завантажує).
+fst = "0.4"
+# Серіалізація n-gram LM у компактний .bin (класичний serde-API). Лише typofix-data.
+bincode = "1"
 # Внутрішні крейти посилаються одне на одного через workspace-шляхи.
 typofix-platform = { path = "crates/typofix-platform" }
 typofix-platform-virtual = { path = "crates/typofix-platform-virtual" }

@@ -22,6 +22,8 @@ pub mod replacer;
 pub mod rules;
 pub mod undo;
 
+pub use buffer::{BufferStore, WordBuffer};
+pub use detector::{Decision, DetectorConfig, LanguageProfile};
 pub use dict::Dictionary;
 pub use layout_mapper::{KeyCap, KeyStroke, Layout};
 pub use lm::NgramModel;
@@ -29,31 +31,43 @@ pub use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, LayoutId, Modif
 
 /// Увесь змінний стан ядра між викликами [`step`].
 ///
-/// Поки порожній — наповнюватиметься per-window буфером, стеком undo,
-/// динамічними винятками тощо у наступних фазах.
+/// Тримає per-window буфери слів. Далі сюди додадуться стек undo й кеш
+/// динамічних винятків.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EngineState {
-    // TODO(phase-1): buffer (per-window), undo-стек, кеш винятків.
+    /// Буфери натискань поточного слова, окремо для кожного вікна.
+    pub buffers: BufferStore,
 }
 
-/// Незмінний контекст для одного кроку рішення.
+/// Незмінний контекст одного кроку рішення.
 ///
-/// Постачається платформою/оркестратором; ядро лише читає його.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Context {
+/// Постачається платформою/оркестратором; ядро лише **читає** його. Несе
+/// позичені ресурси мов ([`LanguageProfile`]) — core нічого не вантажить сам, а
+/// важкі моделі не клонуються щокроку.
+#[derive(Debug, Clone)]
+pub struct Context<'a> {
     /// Активне вікно/застосунок на момент події.
     pub active_window: WindowInfo,
     /// Поточна активна розкладка системи.
     pub current_layout: LayoutId,
-    // TODO(phase-1): settings (мовні пари, поріг, правила, виключення).
+    /// Увімкнені мови-кандидати (включно з поточною).
+    pub languages: &'a [LanguageProfile],
+    /// Налаштування детектора (ваги, крива порогу).
+    pub config: DetectorConfig,
+}
+
+impl Context<'_> {
+    /// Профіль поточної розкладки серед увімкнених мов, якщо є.
+    pub fn current_profile(&self) -> Option<&LanguageProfile> {
+        self.languages.iter().find(|p| p.id == self.current_layout)
+    }
 }
 
 /// Один крок машини рішень: обробити подію й повернути план дій.
 ///
 /// Детермінований за побудовою: результат залежить лише від `state`, `ev` і
-/// `ctx`. Зараз — заглушка, що нічого не робить.
+/// `ctx` (жодного годинника/IO/випадковості).
 pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Action> {
-    // Поки делегуємо в engine-заглушку, щоб місце склейки було видиме.
     engine::step(state, ev, ctx)
 }
 
@@ -61,10 +75,12 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
 mod tests {
     use super::*;
 
-    fn sample_context() -> Context {
+    fn sample_context() -> Context<'static> {
         Context {
             active_window: WindowInfo::default(),
             current_layout: LayoutId::new("en"),
+            languages: &[],
+            config: DetectorConfig::default(),
         }
     }
 

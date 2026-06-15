@@ -15,6 +15,8 @@ serde = { workspace = true }
 
 [dev-dependencies]
 typofix-platform-virtual.workspace = true
+# Лише для E2E-тестів: завантажити зразкові розкладки/LM/словники.
+typofix-data.workspace = true
 
 [lints]
 workspace = true

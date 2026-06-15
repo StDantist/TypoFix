@@ -205,6 +205,7 @@ version = "0.1.0"
 dependencies = [
  "fst",
  "serde",
+ "typofix-data",
  "typofix-platform",
  "typofix-platform-virtual",
 ]

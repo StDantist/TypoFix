@@ -6,7 +6,7 @@
 //! застосовуються назад. Реальний сценарій «ghbdsn → привіт» зʼявиться у
 //! Фазі 2-3, коли ядро навчиться розпізнавати.
 
-use typofix_core::{step, Context, EngineState};
+use typofix_core::{step, Context, DetectorConfig, EngineState};
 use typofix_platform::{InputEvent, KeyDir, KeyEvent, LayoutId, Modifiers, Platform, WindowInfo};
 use typofix_platform_virtual::{drive, VirtualPlatform};
 
@@ -30,6 +30,8 @@ fn run_engine(platform: &mut VirtualPlatform) {
         let ctx = Context {
             active_window: win.clone(),
             current_layout: layout.clone(),
+            languages: &[],
+            config: DetectorConfig::default(),
         };
         step(&mut state, ev, &ctx)
     });

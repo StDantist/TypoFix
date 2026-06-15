@@ -360,3 +360,89 @@ fn accepting_retype_does_not_learn() {
         "CommitException не має емітитись при прийнятті"
     );
 }
+
+// --- Синхронізація буфера на Backspace (§3.4) ------------------------------
+
+#[test]
+fn mid_word_backspace_pops_then_retype_works() {
+    let langs = [profile("uk"), profile("en")];
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn"); // екран після того, як користувач сам стер помилку
+
+    // g h b d s, помилкова 'k' (0x25), Backspace (поп 'k'), далі n, пробіл.
+    platform.enqueue_all([
+        key(G),
+        key(H),
+        key(B),
+        key(D),
+        key(S),
+        key(0x25),
+        key(BACKSPACE),
+        key(N),
+        key(SPACE),
+    ]);
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "привіт",
+        "поп помилкового страйка лишає слово когерентним → коректний перенабір"
+    );
+}
+
+#[test]
+fn multiple_backspaces_step_back_then_continue() {
+    let langs = [profile("uk"), profile("en")];
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+
+    // Повне слово, потім 3×Backspace (лишається g h b), потім знову d s n, пробіл.
+    platform.enqueue_all([
+        key(G),
+        key(H),
+        key(B),
+        key(D),
+        key(S),
+        key(N),
+        key(BACKSPACE),
+        key(BACKSPACE),
+        key(BACKSPACE),
+        key(D),
+        key(S),
+        key(N),
+        key(SPACE),
+    ]);
+    run(&mut platform, &langs);
+
+    assert_eq!(platform.text(), "привіт", "поетапне стирання + продовження");
+}
+
+#[test]
+fn backspace_on_empty_buffer_does_not_pollute_next_word() {
+    let langs = [profile("uk"), profile("en")];
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+
+    // Backspace на порожньому буфері (стирання у попередній текст) → інвалідація;
+    // подальше чисте слово має перенабратись без домішок (рівно "привіт").
+    platform.enqueue_all([
+        key(BACKSPACE),
+        key(G),
+        key(H),
+        key(B),
+        key(D),
+        key(S),
+        key(N),
+        key(SPACE),
+    ]);
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "привіт",
+        "порожній Backspace не псує наступне слово"
+    );
+}

@@ -52,8 +52,9 @@ fn classify(stroke: KeyStroke, current_layout: Option<&Layout>) -> Class {
         Some(ch) if ch.is_alphabetic() || ch == '\'' || ch == '’' => Class::Word,
         Some(_) => Class::Boundary, // цифра/пунктуація
         None => {
-            // Невідома клавіша без розкладки: F-клавіші, Backspace тощо мапи не
-            // мають → вважаємо межею (безпечно завершує слово).
+            // Невідома клавіша без символу (F-клавіші, Delete тощо) → межа
+            // (безпечно завершує слово). Backspace сюди не доходить — його
+            // перехоплює окрема гілка в `step` (поп/інвалідація).
             Class::Boundary
         }
     }
@@ -150,8 +151,24 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
         return Vec::new();
     }
     // Auto-repeat і командні комбінації рвуть надійність буфера → інвалідувати.
+    // (Сюди ж потрапляє Ctrl+Backspace — видалення цілого слова → інвалідація.)
     if key.is_autorepeat || is_command_combo(key.modifiers) {
         state.buffers.invalidate_window(&wkey);
+        return Vec::new();
+    }
+
+    // Backspace усередині редагування слова (пріоритет: rejection-сигнал вище
+    // вже оброблено, тож сюди доходить лише «звичайний» Backspace):
+    //  - буфер непорожній → ПОП останнього страйка (слово ще когерентне);
+    //  - буфер порожній → стирання у попереднє слово, синхрон утрачено →
+    //    ІНВАЛІДАЦІЯ (наступне слово не змішується з попереднім).
+    if key.scancode == SC_BACKSPACE {
+        let buf = state.buffers.for_window(&wkey);
+        if buf.is_empty() {
+            buf.invalidate();
+        } else {
+            buf.pop();
+        }
         return Vec::new();
     }
 

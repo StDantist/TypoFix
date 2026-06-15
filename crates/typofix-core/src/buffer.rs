@@ -31,6 +31,13 @@ impl WordBuffer {
         self.strokes.clear();
     }
 
+    /// Стерти ОСТАННЄ натискання — синхронізація на Backspace всередині слова.
+    /// Слово лишається когерентним (перенабір далі можливий). Повертає `true`,
+    /// якщо було що стирати.
+    pub fn pop(&mut self) -> bool {
+        self.strokes.pop().is_some()
+    }
+
     /// **Інвалідувати** буфер: зв'язок із текстом перед курсором розірвано
     /// (клік/навігація/фокус/auto-repeat/командна комбінація). Семантично — те
     /// саме очищення, що й [`reset`](Self::reset), але назва підкреслює намір:
@@ -106,6 +113,18 @@ mod tests {
         b.push(stroke(0x22));
         b.invalidate();
         assert!(b.is_empty());
+    }
+
+    #[test]
+    fn pop_removes_last_stroke() {
+        let mut b = WordBuffer::default();
+        b.push(stroke(0x22));
+        b.push(stroke(0x23));
+        assert!(b.pop());
+        assert_eq!(b.strokes(), &[stroke(0x22)]);
+        assert!(b.pop());
+        assert!(b.is_empty());
+        assert!(!b.pop(), "поп порожнього → false");
     }
 
     #[test]

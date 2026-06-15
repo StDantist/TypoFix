@@ -1,0 +1,33 @@
+# Rust
+/target
+**/target
+Cargo.lock.bak
+*.pdb
+
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+
+# Node / Svelte UI
+node_modules
+/ui/dist
+/ui/.svelte-kit
+/ui/build
+.vite
+
+# Data artifacts (large generated models/corpora — keep sources/scripts, not outputs)
+/data/lm/*.bin
+/data/dicts/*.fst
+/data/corpora/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Logs / scratch
+*.log
+/tmp/

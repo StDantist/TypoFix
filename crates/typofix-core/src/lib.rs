@@ -22,6 +22,7 @@ pub mod replacer;
 pub mod rules;
 pub mod undo;
 
+pub use layout_mapper::{KeyCap, KeyStroke, Layout};
 pub use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, LayoutId, Modifiers, WindowInfo};
 
 /// Увесь змінний стан ядра між викликами [`step`].

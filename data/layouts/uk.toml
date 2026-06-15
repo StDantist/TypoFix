@@ -1,0 +1,216 @@
+# Українська (розширена) ЙЦУКЕН.
+#
+# scancode = Windows scancode set 1 (фізична позиція клавіші, не залежить від
+# активної розкладки). Фізичні позиції відповідають тим самим клавішам, що й у
+# en.toml: напр. G(0x22)→п, H(0x23)→р, B(0x30)→и. Тому послідовність "ghbdsn",
+# набрана фізично, читається в цій розкладці як "привіт".
+#
+# Це fallback/еталон: у рантаймі мапінг беремо з ОС. Див. data/CLAUDE.md.
+#
+# Апостроф — типографський ’ (U+2019), а не ASCII '. Окремо є ґ/Ґ і і/ї/є.
+
+id = "uk"
+name = "Українська (розширена)"
+
+# --- цифровий ряд ---------------------------------------------------------
+[[key]]
+scancode = 0x02
+normal = "1"
+shift = "!"
+[[key]]
+scancode = 0x03
+normal = "2"
+shift = "\""
+[[key]]
+scancode = 0x04
+normal = "3"
+shift = "№"
+[[key]]
+scancode = 0x05
+normal = "4"
+shift = ";"
+[[key]]
+scancode = 0x06
+normal = "5"
+shift = "%"
+[[key]]
+scancode = 0x07
+normal = "6"
+shift = ":"
+[[key]]
+scancode = 0x08
+normal = "7"
+shift = "?"
+[[key]]
+scancode = 0x09
+normal = "8"
+shift = "*"
+[[key]]
+scancode = 0x0A
+normal = "9"
+shift = "("
+[[key]]
+scancode = 0x0B
+normal = "0"
+shift = ")"
+[[key]]
+scancode = 0x0C
+normal = "-"
+shift = "_"
+[[key]]
+scancode = 0x0D
+normal = "="
+shift = "+"
+
+# --- верхній літерний ряд: й ц у к е н г ш щ з х ї ------------------------
+[[key]]
+scancode = 0x10
+normal = "й"
+shift = "Й"
+[[key]]
+scancode = 0x11
+normal = "ц"
+shift = "Ц"
+[[key]]
+scancode = 0x12
+normal = "у"
+shift = "У"
+[[key]]
+scancode = 0x13
+normal = "к"
+shift = "К"
+[[key]]
+scancode = 0x14
+normal = "е"
+shift = "Е"
+[[key]]
+scancode = 0x15
+normal = "н"
+shift = "Н"
+[[key]]
+scancode = 0x16
+normal = "г"
+shift = "Г"
+[[key]]
+scancode = 0x17
+normal = "ш"
+shift = "Ш"
+[[key]]
+scancode = 0x18
+normal = "щ"
+shift = "Щ"
+[[key]]
+scancode = 0x19
+normal = "з"
+shift = "З"
+[[key]]
+scancode = 0x1A
+normal = "х"
+shift = "Х"
+[[key]]
+scancode = 0x1B
+normal = "ї"
+shift = "Ї"
+
+# --- домашній ряд: ф і в а п р о л д ж є ----------------------------------
+[[key]]
+scancode = 0x1E
+normal = "ф"
+shift = "Ф"
+[[key]]
+scancode = 0x1F
+normal = "і"
+shift = "І"
+[[key]]
+scancode = 0x20
+normal = "в"
+shift = "В"
+[[key]]
+scancode = 0x21
+normal = "а"
+shift = "А"
+[[key]]
+scancode = 0x22
+normal = "п"
+shift = "П"
+[[key]]
+scancode = 0x23
+normal = "р"
+shift = "Р"
+[[key]]
+scancode = 0x24
+normal = "о"
+shift = "О"
+[[key]]
+scancode = 0x25
+normal = "л"
+shift = "Л"
+[[key]]
+scancode = 0x26
+normal = "д"
+shift = "Д"
+[[key]]
+scancode = 0x27
+normal = "ж"
+shift = "Ж"
+[[key]]
+scancode = 0x28
+normal = "є"
+shift = "Є"
+
+# --- grave: апостроф ’ ; backslash: ґ -------------------------------------
+[[key]]
+scancode = 0x29
+normal = "’"
+shift = "₴"
+[[key]]
+scancode = 0x2B
+normal = "ґ"
+shift = "Ґ"
+
+# --- нижній ряд: я ч с м и т ь б ю . --------------------------------------
+[[key]]
+scancode = 0x2C
+normal = "я"
+shift = "Я"
+[[key]]
+scancode = 0x2D
+normal = "ч"
+shift = "Ч"
+[[key]]
+scancode = 0x2E
+normal = "с"
+shift = "С"
+[[key]]
+scancode = 0x2F
+normal = "м"
+shift = "М"
+[[key]]
+scancode = 0x30
+normal = "и"
+shift = "И"
+[[key]]
+scancode = 0x31
+normal = "т"
+shift = "Т"
+[[key]]
+scancode = 0x32
+normal = "ь"
+shift = "Ь"
+[[key]]
+scancode = 0x33
+normal = "б"
+shift = "Б"
+[[key]]
+scancode = 0x34
+normal = "ю"
+shift = "Ю"
+[[key]]
+scancode = 0x35
+normal = "."
+shift = ","
+
+# --- пробіл ---------------------------------------------------------------
+[[key]]
+scancode = 0x39
+normal = " "

@@ -1,0 +1,212 @@
+# Англійська QWERTY (США).
+#
+# scancode = Windows scancode set 1 (фізична позиція клавіші, не залежить від
+# активної розкладки). Це fallback/еталон: у рантаймі мапінг беремо з ОС
+# (ToUnicodeEx/UCKeyTranslate). Див. data/CLAUDE.md і
+# crates/typofix-core/src/layout_mapper.rs.
+
+id = "en"
+name = "English (US, QWERTY)"
+
+# --- цифровий ряд ---------------------------------------------------------
+[[key]]
+scancode = 0x02
+normal = "1"
+shift = "!"
+[[key]]
+scancode = 0x03
+normal = "2"
+shift = "@"
+[[key]]
+scancode = 0x04
+normal = "3"
+shift = "#"
+[[key]]
+scancode = 0x05
+normal = "4"
+shift = "$"
+[[key]]
+scancode = 0x06
+normal = "5"
+shift = "%"
+[[key]]
+scancode = 0x07
+normal = "6"
+shift = "^"
+[[key]]
+scancode = 0x08
+normal = "7"
+shift = "&"
+[[key]]
+scancode = 0x09
+normal = "8"
+shift = "*"
+[[key]]
+scancode = 0x0A
+normal = "9"
+shift = "("
+[[key]]
+scancode = 0x0B
+normal = "0"
+shift = ")"
+[[key]]
+scancode = 0x0C
+normal = "-"
+shift = "_"
+[[key]]
+scancode = 0x0D
+normal = "="
+shift = "+"
+
+# --- верхній літерний ряд (QWERTY) ---------------------------------------
+[[key]]
+scancode = 0x10
+normal = "q"
+shift = "Q"
+[[key]]
+scancode = 0x11
+normal = "w"
+shift = "W"
+[[key]]
+scancode = 0x12
+normal = "e"
+shift = "E"
+[[key]]
+scancode = 0x13
+normal = "r"
+shift = "R"
+[[key]]
+scancode = 0x14
+normal = "t"
+shift = "T"
+[[key]]
+scancode = 0x15
+normal = "y"
+shift = "Y"
+[[key]]
+scancode = 0x16
+normal = "u"
+shift = "U"
+[[key]]
+scancode = 0x17
+normal = "i"
+shift = "I"
+[[key]]
+scancode = 0x18
+normal = "o"
+shift = "O"
+[[key]]
+scancode = 0x19
+normal = "p"
+shift = "P"
+[[key]]
+scancode = 0x1A
+normal = "["
+shift = "{"
+[[key]]
+scancode = 0x1B
+normal = "]"
+shift = "}"
+
+# --- домашній ряд (ASDF) --------------------------------------------------
+[[key]]
+scancode = 0x1E
+normal = "a"
+shift = "A"
+[[key]]
+scancode = 0x1F
+normal = "s"
+shift = "S"
+[[key]]
+scancode = 0x20
+normal = "d"
+shift = "D"
+[[key]]
+scancode = 0x21
+normal = "f"
+shift = "F"
+[[key]]
+scancode = 0x22
+normal = "g"
+shift = "G"
+[[key]]
+scancode = 0x23
+normal = "h"
+shift = "H"
+[[key]]
+scancode = 0x24
+normal = "j"
+shift = "J"
+[[key]]
+scancode = 0x25
+normal = "k"
+shift = "K"
+[[key]]
+scancode = 0x26
+normal = "l"
+shift = "L"
+[[key]]
+scancode = 0x27
+normal = ";"
+shift = ":"
+[[key]]
+scancode = 0x28
+normal = "'"
+shift = "\""
+
+# --- grave + backslash ----------------------------------------------------
+[[key]]
+scancode = 0x29
+normal = "`"
+shift = "~"
+[[key]]
+scancode = 0x2B
+normal = "\\"
+shift = "|"
+
+# --- нижній ряд (ZXCV) ----------------------------------------------------
+[[key]]
+scancode = 0x2C
+normal = "z"
+shift = "Z"
+[[key]]
+scancode = 0x2D
+normal = "x"
+shift = "X"
+[[key]]
+scancode = 0x2E
+normal = "c"
+shift = "C"
+[[key]]
+scancode = 0x2F
+normal = "v"
+shift = "V"
+[[key]]
+scancode = 0x30
+normal = "b"
+shift = "B"
+[[key]]
+scancode = 0x31
+normal = "n"
+shift = "N"
+[[key]]
+scancode = 0x32
+normal = "m"
+shift = "M"
+[[key]]
+scancode = 0x33
+normal = ","
+shift = "<"
+[[key]]
+scancode = 0x34
+normal = "."
+shift = ">"
+[[key]]
+scancode = 0x35
+normal = "/"
+shift = "?"
+
+# --- пробіл ---------------------------------------------------------------
+[[key]]
+scancode = 0x39
+normal = " "

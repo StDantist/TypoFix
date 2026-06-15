@@ -2,9 +2,15 @@
 
 Мовно-залежні дані (мовна-агностичність: додати мову = додати дані, не код).
 
-- `layouts/{id}.toml` — мапа `scancode → {normal, shift, altgr}`. **Це лише
-  fallback/еталон.** У рантаймі мапінг беремо з ОС (`ToUnicodeEx`/`UCKeyTranslate`),
-  бо TOML не покриває AltGr/dead-keys і фактичну розкладку системи.
+- `layouts/{id}.toml` — масив записів `[[key]]` із `scancode → {normal, shift?,
+  altgr?}`. **Це лише fallback/еталон.** У рантаймі мапінг беремо з ОС
+  (`ToUnicodeEx`/`UCKeyTranslate`), бо TOML не покриває AltGr/dead-keys і
+  фактичну розкладку системи.
+  - **Конвенція scancode — Windows scancode set 1** (make-коди: `Q=0x10`,
+    `A=0x1E`, `G=0x22`, пробіл `0x39`). Це **фізична** позиція клавіші, спільна
+    для всіх розкладок (тому `ghbdsn` ↔ `привіт`). macOS-бекенд транслює свої
+    keycode у цю ж конвенцію. Парсер/мапінг: `typofix-data`,
+    `typofix-core::layout_mapper`. Символи у Unicode (апостроф — `’` U+2019).
 - `lm/{lang}.bin` — натреновані n-gram моделі; `dicts/{lang}.fst` — словники;
   `corpora/` — сирі корпуси. **Усі ці артефакти gitignored** (великі, генеровані).
   У git тримаємо лише ВХІДНІ дані (layouts) і **скрипти генерації** (відтворюваність).

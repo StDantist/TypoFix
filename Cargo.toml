@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/typofix-core",
+    "crates/typofix-platform",
+    "crates/typofix-platform-virtual",
+    "crates/typofix-platform-windows",
+    "crates/typofix-platform-macos",
+    "crates/typofix-data",
+    "crates/typofix-replay",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Спільні зовнішні залежності тримаємо тут, версії — в одному місці.
+bitflags = "2"
+thiserror = "2"
+# Внутрішні крейти посилаються одне на одного через workspace-шляхи.
+typofix-platform = { path = "crates/typofix-platform" }
+typofix-core = { path = "crates/typofix-core" }
+typofix-data = { path = "crates/typofix-data" }
+
+# Workspace-рівневі lints: clippy::all як warn усюди.
+# Заборону `unsafe_code` тут НЕ ставимо глобально, бо платформним крейтам
+# (windows/macos) unsafe знадобиться для WinAPI/CoreGraphics. typofix-core
+# забороняє unsafe локально через `#![forbid(unsafe_code)]`.
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,28 @@
+name: Real-OS Tests (Level 4)
+
+# СКЕЛЕТ. Тут запускатимуться інтеграційні тести рівня 4 на «справжніх» ОС:
+#   * Windows: UI Automation харнес (Фаза 5) — перевірка вставки/заміни тексту
+#     у реальних застосунках через UIA та симуляцію клавіатури.
+#   * macOS:  Accessibility-харнес (Фаза 7) — перевірка через AX API та
+#     Accessibility-дозволи.
+# Ці тести важкі, повільні й вимагають інтерактивної сесії, тому винесені в
+# окремий workflow з ручним тригером. Поки що — заглушка (echo), щоб файл був
+# валідним і його можна було «увімкнути» пізніше.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows-uia:
+    name: Windows UI Automation harness (Phase 5 — placeholder)
+    runs-on: windows-latest
+    steps:
+      - name: Placeholder
+        run: echo "TODO (Phase 5): run Windows UI Automation real-OS harness here."
+
+  macos-accessibility:
+    name: macOS Accessibility harness (Phase 7 — placeholder)
+    runs-on: macos-latest
+    steps:
+      - name: Placeholder
+        run: echo "TODO (Phase 7): run macOS Accessibility real-OS harness here."

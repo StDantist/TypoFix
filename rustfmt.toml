@@ -1,0 +1,11 @@
+# Конфіг форматування для TypoFix.
+# Тримаємо мінімальним і повністю сумісним зі stable `cargo fmt`.
+
+edition = "2021"
+max_width = 100
+
+# imports_granularity = "Crate"
+# ↑ Бажана опція (групує use-імпорти на рівні крейта), але вона nightly-only.
+# На stable `cargo fmt` невідомі опції викликають помилку, тому тримаємо її
+# закоментованою. Увімкнути після переходу на nightly fmt:
+#   cargo +nightly fmt

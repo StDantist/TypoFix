@@ -31,3 +31,6 @@ Thumbs.db
 # Logs / scratch
 *.log
 /tmp/
+
+# Maestro orchestrator internals (private team state / atlas)
+/.deck/

@@ -1,0 +1,13 @@
+[package]
+name = "typofix-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Чиста детермінована логіка рішень TypoFix: step(state, event, ctx) -> actions."
+
+[dependencies]
+typofix-platform.workspace = true
+
+[lints]
+workspace = true

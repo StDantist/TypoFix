@@ -6,9 +6,12 @@
 //! застосовуються назад. Реальний сценарій «ghbdsn → привіт» зʼявиться у
 //! Фазі 2-3, коли ядро навчиться розпізнавати.
 
-use typofix_core::{step, Context, DetectorConfig, EngineState};
+use typofix_core::{step, Context, DetectorConfig, EngineState, ExclusionRules, WordRules};
 use typofix_platform::{InputEvent, KeyDir, KeyEvent, LayoutId, Modifiers, Platform, WindowInfo};
 use typofix_platform_virtual::{drive, VirtualPlatform};
+
+static NO_EXCL: ExclusionRules = ExclusionRules::new();
+static NO_RULES: WordRules = WordRules::new();
 
 fn key(scancode: u32) -> InputEvent {
     InputEvent::Key(KeyEvent {
@@ -32,6 +35,8 @@ fn run_engine(platform: &mut VirtualPlatform) {
             current_layout: layout.clone(),
             languages: &[],
             config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules: &NO_RULES,
         };
         step(&mut state, ev, &ctx)
     });

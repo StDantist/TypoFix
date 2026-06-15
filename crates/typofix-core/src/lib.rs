@@ -25,8 +25,10 @@ pub mod undo;
 pub use buffer::{BufferStore, WordBuffer};
 pub use detector::{Decision, DetectorConfig, LanguageProfile};
 pub use dict::Dictionary;
+pub use exceptions::ExclusionRules;
 pub use layout_mapper::{KeyCap, KeyStroke, Layout};
 pub use lm::NgramModel;
+pub use rules::WordRules;
 pub use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, LayoutId, Modifiers, WindowInfo};
 
 /// Увесь змінний стан ядра між викликами [`step`].
@@ -54,12 +56,21 @@ pub struct Context<'a> {
     pub languages: &'a [LanguageProfile],
     /// Налаштування детектора (ваги, крива порогу).
     pub config: DetectorConfig,
+    /// Виключення застосунків/папок (де TypoFix узагалі не діє).
+    pub exclusions: &'a ExclusionRules,
+    /// Правила рівня слова (veto/force).
+    pub rules: &'a WordRules,
 }
 
 impl Context<'_> {
     /// Профіль поточної розкладки серед увімкнених мов, якщо є.
     pub fn current_profile(&self) -> Option<&LanguageProfile> {
         self.languages.iter().find(|p| p.id == self.current_layout)
+    }
+
+    /// Чи активне вікно повністю виключене (детектор має бути обійдений).
+    pub fn is_window_excluded(&self) -> bool {
+        self.exclusions.excludes(&self.active_window)
     }
 }
 
@@ -75,12 +86,17 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
 mod tests {
     use super::*;
 
+    static NO_EXCL: ExclusionRules = ExclusionRules::new();
+    static NO_RULES: WordRules = WordRules::new();
+
     fn sample_context() -> Context<'static> {
         Context {
             active_window: WindowInfo::default(),
             current_layout: LayoutId::new("en"),
             languages: &[],
             config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules: &NO_RULES,
         }
     }
 

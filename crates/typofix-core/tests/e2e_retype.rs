@@ -7,9 +7,15 @@
 //! [`Action`] (саме тому крякозябри ставимо через `set_text`, імітуючи те, що
 //! ОС уже надрукувала). Деталі моделі — `typofix-platform-virtual/CLAUDE.md`.
 
-use typofix_core::{step, Context, DetectorConfig, EngineState, LanguageProfile, LayoutId};
-use typofix_platform::{InputEvent, KeyDir, KeyEvent, Modifiers, Platform};
+use typofix_core::{
+    step, Context, DetectorConfig, EngineState, ExclusionRules, LanguageProfile, LayoutId,
+    WordRules,
+};
+use typofix_platform::{InputEvent, KeyDir, KeyEvent, Modifiers, Platform, WindowInfo};
 use typofix_platform_virtual::{drive, VirtualPlatform};
+
+static NO_EXCL: ExclusionRules = ExclusionRules::new();
+static NO_RULES: WordRules = WordRules::new();
 
 fn key(scancode: u32) -> InputEvent {
     InputEvent::Key(KeyEvent {
@@ -35,6 +41,15 @@ fn profile(id: &str) -> LanguageProfile {
 
 /// Прогнати чергу подій платформи через справжній `core::step` з даними мов.
 fn run(platform: &mut VirtualPlatform, langs: &[LanguageProfile]) {
+    run_with(platform, langs, &NO_EXCL);
+}
+
+/// Те саме, але із заданими виключеннями (для тесту bypass теки).
+fn run_with(
+    platform: &mut VirtualPlatform,
+    langs: &[LanguageProfile],
+    exclusions: &ExclusionRules,
+) {
     let mut state = EngineState::default();
     drive(platform, |ev, win, layout| {
         let ctx = Context {
@@ -42,6 +57,8 @@ fn run(platform: &mut VirtualPlatform, langs: &[LanguageProfile]) {
             current_layout: layout.clone(),
             languages: langs,
             config: DetectorConfig::default(),
+            exclusions,
+            rules: &NO_RULES,
         };
         step(&mut state, ev, &ctx)
     });
@@ -172,4 +189,50 @@ fn mouse_click_invalidates_buffer_no_retype() {
         "після кліку перенабору бути не повинно"
     );
     assert!(platform.applied_actions().is_empty());
+}
+
+#[test]
+fn excluded_folder_bypasses_then_works_when_removed() {
+    let langs = [profile("uk"), profile("en")];
+
+    // Гра запущена з виключеної теки C:\Games → жодного перенабору.
+    let game_window = WindowInfo {
+        process_name: "game.exe".into(),
+        exe_path: r"C:\Games\Cool\game.exe".into(),
+        is_fullscreen: false,
+    };
+
+    let mut excl = ExclusionRules::new();
+    excl.exclude_folder(r"C:\Games");
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_window(game_window.clone());
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
+
+    run_with(&mut platform, &langs, &excl);
+
+    assert_eq!(
+        platform.text(),
+        "ghbdsn",
+        "у виключеній теці чіпати не можна"
+    );
+    assert!(platform.applied_actions().is_empty());
+
+    // Те саме вікно, але БЕЗ виключення → перенабір спрацьовує.
+    let mut platform = VirtualPlatform::new();
+    platform.set_window(game_window);
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
+
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "привіт",
+        "без виключення — звичайний перенабір"
+    );
+    assert_eq!(platform.current_layout(), LayoutId::new("uk"));
 }

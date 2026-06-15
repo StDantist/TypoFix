@@ -71,6 +71,12 @@ fn handle_boundary(buffers: &mut BufferStore, key: &str, ctx: &Context) -> Vec<A
 
 /// Внутрішня реалізація кроку (див. [`crate::step`]).
 pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Action> {
+    // Виключене вікно (застосунок/папка) — повний bypass: не буферимо й не
+    // перемикаємо. Перевіряємо ПЕРЕД detector (порядок: bypass → veto).
+    if ctx.is_window_excluded() {
+        return Vec::new();
+    }
+
     let wkey = window_key(&ctx.active_window);
 
     let key: KeyEvent = match ev {

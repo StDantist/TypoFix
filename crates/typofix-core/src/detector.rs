@@ -140,14 +140,15 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     let len = current_text.chars().count();
     let confidence = best_score - current_score;
 
-    // Вето правил — хук для Фази 4 (білий список/регекси/контекст). Поки no-op.
-    let vetoed = false;
+    // Правила рівня слова: veto (захист precision) має пріоритет; force дозволяє
+    // перемкнути в обхід порогу/довжини (але не в обхід veto чи best≠current).
+    let vetoed = ctx.rules.vetoes(&current_text, &best_text);
+    let forced = ctx.rules.forces(&current_text);
 
     let switch = current.is_some()
         && best != ctx.current_layout
-        && len >= cfg.min_switch_len
-        && confidence > cfg.threshold(len)
-        && !vetoed;
+        && !vetoed
+        && (forced || (len >= cfg.min_switch_len && confidence > cfg.threshold(len)));
 
     Decision {
         best,
@@ -211,7 +212,8 @@ mod tests {
             3,
             0.5,
         );
-        let dict = Dictionary::from_words(["привіт", "світ", "друже", "добре", "день"]).unwrap();
+        let dict =
+            Dictionary::from_words(["привіт", "світ", "друже", "добре", "день", "п"]).unwrap();
         LanguageProfile {
             id: LayoutId::new("uk"),
             layout,
@@ -227,12 +229,34 @@ mod tests {
             .collect()
     }
 
+    use crate::{ExclusionRules, WordRules};
+
+    static NO_EXCL: ExclusionRules = ExclusionRules::new();
+    static NO_RULES: WordRules = WordRules::new();
+
     fn ctx_with<'a>(langs: &'a [LanguageProfile], current: &str) -> Context<'a> {
         Context {
             active_window: Default::default(),
             current_layout: LayoutId::new(current),
             languages: langs,
             config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules: &NO_RULES,
+        }
+    }
+
+    fn ctx_with_rules<'a>(
+        langs: &'a [LanguageProfile],
+        current: &str,
+        rules: &'a WordRules,
+    ) -> Context<'a> {
+        Context {
+            active_window: Default::default(),
+            current_layout: LayoutId::new(current),
+            languages: langs,
+            config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules,
         }
     }
 
@@ -291,5 +315,33 @@ mod tests {
         let ctx = ctx_with(&langs, "en");
         let d = decide(&strokes(&[0x22, 0x23, 0x30, 0x20, 0x1F, 0x31]), &ctx);
         assert!(!d.switch);
+    }
+
+    #[test]
+    fn veto_word_blocks_high_score_switch() {
+        let langs = [en_profile(), uk_profile()];
+        let mut rules = WordRules::new();
+        rules.veto_word("привіт"); // навіть із високим балом — не чіпати
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x22, 0x23, 0x30, 0x20, 0x1F, 0x31]), &ctx);
+        assert!(!d.switch, "veto має заблокувати перемикання");
+        assert_eq!(d.best_text, "привіт"); // детектор усе одно бачить кандидата
+    }
+
+    #[test]
+    fn force_word_switches_below_min_length() {
+        let langs = [en_profile(), uk_profile()];
+        // 1 символ: g → en "g", uk "п" (є у словнику uk → bonus робить best=uk).
+        // Коротше за min_switch_len(2) → БЕЗ force не перемикається ніколи.
+        let plain = ctx_with(&langs, "en");
+        let d0 = decide(&strokes(&[0x22]), &plain);
+        assert!(!d0.switch, "коротке (1 символ) без force не чіпати");
+
+        let mut rules = WordRules::new();
+        rules.force_word("g");
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x22]), &ctx);
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert!(d.switch, "force має перемкнути попри min length");
     }
 }

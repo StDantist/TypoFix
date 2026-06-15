@@ -1,0 +1,31 @@
+# ВІДОКРЕМЛЕНИЙ workspace. Порожня секція [workspace] нижче навмисна:
+# вона ВІДВ'ЯЗУЄ цей крейт від кореневого бібліотечного workspace, щоб
+# `cargo test --workspace` з кореня лишався швидким і не тягнув важкий
+# GUI-тулчейн (Tauri/WebView2, frontend dist). Деталі — у src-tauri/CLAUDE.md.
+[workspace]
+
+[package]
+name = "typofix-app"
+version = "0.1.0"
+description = "TypoFix — трей-застосунок (Tauri-оболонка над ядром розпізнавання)"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.80"
+
+[lib]
+# Tauri 2 будує логіку в бібліотеці (готовність до мобільних таргетів),
+# а main.rs лише викликає run(). Ім'я з суфіксом _lib, щоб не конфліктувати з bin.
+name = "typofix_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Дефолтна продакшн-конфігурація Tauri (custom protocol для вшитого фронтенду).
+custom-protocol = ["tauri/custom-protocol"]

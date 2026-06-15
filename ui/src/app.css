@@ -1,0 +1,57 @@
+:root {
+  --bg: #1e1f22;
+  --bg-elev: #2b2d31;
+  --bg-card: #313338;
+  --border: #3f4147;
+  --text: #e6e7ea;
+  --text-dim: #9aa0a6;
+  --accent: #5b8def;
+  --radius: 10px;
+
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background-color: var(--bg);
+
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f4f5f7;
+    --bg-elev: #ffffff;
+    --bg-card: #ffffff;
+    --border: #e1e3e8;
+    --text: #1f2328;
+    --text-dim: #5c6370;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg);
+}
+
+body {
+  /* Не виділяємо UI-хром як текст — це застосунок, не сторінка. */
+  user-select: none;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+a {
+  color: var(--accent);
+}

@@ -1,0 +1,24 @@
+{
+  "name": "typofix-ui",
+  "version": "0.1.0",
+  "description": "TypoFix — UI налаштувань (Svelte + Vite, фронтенд для Tauri-оболонки)",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./jsconfig.json",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tauri-apps/cli": "^2.5.0",
+    "svelte": "^5.19.0",
+    "svelte-check": "^4.1.4",
+    "vite": "^6.0.7"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0"
+  }
+}

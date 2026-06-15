@@ -217,6 +217,7 @@ dependencies = [
  "bincode",
  "fst",
  "serde",
+ "serde_json",
  "thiserror",
  "toml",
  "typofix-core",

@@ -1,6 +1,6 @@
 // Мінімальний каркас локалізації без зовнішніх залежностей.
 // Українська — мова за замовчуванням. Додати мову = додати об'єкт у `messages`.
-// Доступ до рядків: t("settings.title"). Перемикання мови — store `locale`.
+// Доступ до рядків: $t("settings.title"). Перемикання мови — store `locale`.
 
 import { writable, derived } from "svelte/store";
 
@@ -12,28 +12,51 @@ const messages = {
     "settings.subtitle":
       "Виправлення тексту, набраного в неправильній розкладці",
 
-    "section.languagePairs.title": "Мовні пари",
-    "section.languagePairs.desc":
-      "Між якими розкладками виправляти текст (напр. українська ⇄ англійська).",
+    // Загальний стан
+    "section.general.title": "Загальне",
+    "toggle.enabled.label": "Увімкнено",
+    "toggle.enabled.on": "TypoFix активний",
+    "toggle.enabled.off": "TypoFix на паузі",
 
-    "section.threshold.title": "Поріг впевненості",
-    "section.threshold.desc":
-      "Наскільки впевнено має бути визначено помилку, щоб перенабрати текст. Вища влучність = менше хибних спрацювань.",
+    // Мовна пара
+    "section.language.title": "Мовна пара",
+    "section.language.desc": "Між якими розкладками виправляти текст.",
+    "language.uk-en": "Українська ⇄ Англійська",
 
-    "section.exclusions.title": "Виключення (застосунки/папки)",
+    // Виключення
+    "section.exclusions.title": "Виключення (застосунки / папки)",
     "section.exclusions.desc":
-      "Програми та шляхи, у яких TypoFix не діятиме (термінали, ігри, IDE тощо).",
+      "Де TypoFix узагалі не діятиме: за іменем процесу, конкретним exe або цілою текою (рекурсивно).",
+    "exclusions.kind.process": "процес",
+    "exclusions.kind.exe": "exe",
+    "exclusions.kind.folder": "тека",
+    "exclusions.list.process": "Процеси",
+    "exclusions.list.exe": "Файли (.exe)",
+    "exclusions.list.folder": "Теки",
+    "exclusions.empty": "Порожньо",
+    "exclusions.process.placeholder": "напр. game.exe",
+    "exclusions.add.process": "Додати процес",
+    "exclusions.add.exe": "Додати .exe…",
+    "exclusions.add.folder": "Додати теку…",
+    "exclusions.remove": "Видалити",
 
-    "section.rules.title": "Правила та винятки",
-    "section.rules.desc":
-      "Слова й шаблони, які завжди ігнорувати або, навпаки, завжди виправляти.",
+    // Advanced
+    "section.detection.title": "Поріг впевненості (advanced)",
+    "section.detection.desc":
+      "Наскільки впевнено має бути визначено помилку, щоб перенабрати текст. Вища влучність = менше хибних спрацювань.",
+    "detection.minWordLen": "Мінімальна довжина слова",
+    "detection.threshold": "Поріг впевненості",
 
-    "section.hotkeys.title": "Гарячі клавіші",
-    "section.hotkeys.desc":
-      "Ручне перемикання останнього слова, пауза/відновлення, скасування виправлення.",
+    // Дії
+    "action.save": "Зберегти",
+    "action.cancel": "Скасувати",
+    "status.saved": "Збережено",
+    "status.saveError": "Помилка збереження",
+    "status.loadError": "Помилка завантаження конфігу",
+    "status.dirty": "Є незбережені зміни",
 
-    "placeholder.empty": "Каркас — налаштування з'являться згодом.",
-    "footer.note": "Скелет інтерфейсу. Логіку розпізнавання ще не під'єднано.",
+    "footer.note":
+      "Конфіг зберігається локально. Натиски й набраний текст ніколи не пишуться на диск.",
   },
 };
 

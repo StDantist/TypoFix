@@ -53,3 +53,31 @@ npm --prefix ui install
 - Вікно налаштувань стартує прихованим (`visible: false` у conf); закриття вікна
   його **ховає** (`api.prevent_close()` + `hide()`), а не закриває застосунок.
   Застосунок живе у треї; вийти — лише через пункт «Вихід».
+
+## Конфіг (`config.rs` + вікно налаштувань)
+- **Файл:** `settings.json` у Tauri **app config dir** (`app.path().app_config_dir()`).
+  На Windows це `%APPDATA%\dev.typofix.app\settings.json` (identifier із conf).
+- **Формат:** pretty-JSON DTO `AppSettings` (version, enabled, language, exclusions
+  {process_names/exe_paths/folders}, detection). Усі поля `#[serde(default)]` →
+  старі/часткові файли читаються без падіння (forward/back-compat).
+- **ПРИВАТНІСТЬ (залізне правило):** у конфіг ідуть ЛИШЕ налаштування. НІКОЛИ
+  натиски/буфер/набраний текст — їх тут немає й не повинно бути.
+- **Власний DTO, НЕ типи `typofix-core`:** app-крейт у відокремленому workspace не
+  залежить від core. DTO лише дзеркалить форму `ExclusionRules`. Маппінг DTO→core
+  (+ нормалізація шляхів) робить core при матчингу — буде у Фазі 5 (жива проводка).
+- **Запис атомарний:** tmp-файл → `rename` поверх цілі (без напівзаписаних конфігів).
+- **Пошкоджений файл = помилка, не мовчазний дефолт** (UI показує). Відсутній файл
+  (перший запуск) = дефолти.
+- **Команди:** `load_settings` (диск → in-memory + повертає форму),
+  `save_settings(settings)` (валідує `sanitized()`, пише, оновлює трей, повертає
+  очищене). Диск — джерело істини; `AppState.settings` — синхронізована копія.
+- **Синхрон трей↔вікно:** toggle у треї змінює `enabled`, пише на диск і емітить
+  подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
+  `enabled`, не чіпаючи можливих незбережених правок у формі.
+
+## Дозволи (capabilities) — НЕ забути при додаванні команд/плагінів
+`capabilities/default.json` (window `settings`) перелічує дозволи. Без потрібного
+дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,
+events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/теки —
+плагін `tauri-plugin-dialog`). Власні app-команди (`load_settings`/`save_settings`)
+працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.

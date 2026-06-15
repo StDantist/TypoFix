@@ -1,30 +1,38 @@
-//! TypoFix — Tauri-оболонка (скелет).
+//! TypoFix — Tauri-оболонка.
 //!
-//! Це лише GUI-каркас: трей-іконка з меню + приховуване вікно налаштувань.
-//! Реальної логіки розпізнавання тут НЕМАЄ — її під'єднають пізніше
-//! (`typofix-core` + платформні крейти) у місцях, позначених `TODO`.
+//! GUI-шар: трей-іконка з меню + вікно налаштувань, що редагує й зберігає
+//! конфіг (`config.rs`). Реальної логіки розпізнавання тут НЕМАЄ — місця
+//! під'єднання ядра/платформи позначено `TODO` (Фаза 5).
+
+mod config;
 
 use std::sync::Mutex;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent, Wry,
+    AppHandle, Emitter, Manager, State, WindowEvent, Wry,
 };
 
-/// Глобальний стан застосунку в треї. Поки що — лише прапорець паузи.
+use config::AppSettings;
+
+/// Глобальний стан застосунку в треї: повний конфіг у пам'яті.
+/// Диск — джерело істини; ця копія тримається синхронізованою при save/toggle.
 #[derive(Default)]
 struct AppState {
-    /// `true` → розпізнавання на паузі (ще не під'єднано до ядра).
-    paused: Mutex<bool>,
+    settings: Mutex<AppSettings>,
 }
 
 const TRAY_ID: &str = "main-tray";
 const SETTINGS_WINDOW: &str = "settings";
 
+/// Подія до фронтенду: конфіг змінився ззовні форми (напр. toggle у треї).
+/// Вікно налаштувань слухає й оновлює перемикач «Увімкнено».
+const EVENT_SETTINGS_CHANGED: &str = "settings:changed";
+
 // Ідентифікатори пунктів меню.
 const MENU_STATUS: &str = "status";
-const MENU_TOGGLE: &str = "toggle_pause";
+const MENU_TOGGLE: &str = "toggle_enabled";
 const MENU_SETTINGS: &str = "open_settings";
 const MENU_AUTOSTART: &str = "toggle_autostart";
 const MENU_QUIT: &str = "quit";
@@ -38,21 +46,21 @@ fn show_settings(app: &AppHandle) {
     }
 }
 
-/// Зібрати трей-меню для поточного стану паузи.
-/// Перебудовуємо повністю при кожній зміні стану — меню маленьке, це дешево.
-fn build_tray_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<Wry>> {
-    let status_label = if paused {
-        "● Статус: на паузі"
-    } else {
+/// Зібрати трей-меню для поточного стану (увімкнено/пауза).
+/// Перебудовуємо повністю при кожній зміні — меню маленьке, це дешево.
+fn build_tray_menu(app: &AppHandle, enabled: bool) -> tauri::Result<Menu<Wry>> {
+    let status_label = if enabled {
         "● Статус: активний"
+    } else {
+        "● Статус: на паузі"
     };
     // Рядок статусу неактивний (disabled) — це індикатор, не кнопка.
     let status = MenuItem::with_id(app, MENU_STATUS, status_label, false, None::<&str>)?;
 
-    let toggle_label = if paused {
-        "Відновити"
-    } else {
+    let toggle_label = if enabled {
         "Пауза"
+    } else {
+        "Відновити"
     };
     let toggle = MenuItem::with_id(app, MENU_TOGGLE, toggle_label, true, None::<&str>)?;
 
@@ -64,8 +72,7 @@ fn build_tray_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?;
 
-    // TODO(autostart): зробити реальний toggle через tauri-plugin-autostart.
-    // Поки що пункт лише показує намір; стан не зберігається.
+    // TODO(autostart): реальний toggle через tauri-plugin-autostart.
     let autostart = MenuItem::with_id(
         app,
         MENU_AUTOSTART,
@@ -90,37 +97,83 @@ fn build_tray_menu(app: &AppHandle, paused: bool) -> tauri::Result<Menu<Wry>> {
     )
 }
 
-/// Перемкнути паузу й оновити меню/підказку трею.
-fn toggle_pause(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let now = {
-        let mut paused = state.paused.lock().expect("AppState.paused отруєно");
-        *paused = !*paused;
-        *paused
-    };
-
-    // TODO: тут під'єднати реальну паузу/відновлення hot-path хука (платформа).
-
+/// Оновити трей-меню й tooltip під поточний `enabled`.
+fn refresh_tray(app: &AppHandle, enabled: bool) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if let Ok(menu) = build_tray_menu(app, now) {
+        if let Ok(menu) = build_tray_menu(app, enabled) {
             let _ = tray.set_menu(Some(menu));
         }
-        let tip = if now {
-            "TypoFix — на паузі"
-        } else {
+        let tip = if enabled {
             "TypoFix — активний"
+        } else {
+            "TypoFix — на паузі"
         };
         let _ = tray.set_tooltip(Some(tip));
     }
 }
 
+/// Перемкнути «увімкнено» з трею: оновити стан, зберегти на диск,
+/// оновити меню й сповістити вікно налаштувань.
+fn toggle_enabled(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let snapshot = {
+        let mut settings = state.settings.lock().expect("AppState отруєно");
+        settings.enabled = !settings.enabled;
+        settings.clone()
+    };
+
+    // TODO: тут під'єднати реальну паузу/відновлення hot-path хука (платформа).
+
+    if let Err(err) = config::save_to_disk(app, &snapshot) {
+        // Не валимо застосунок через помилку диска — лише лог у stderr.
+        eprintln!("TypoFix: не вдалося зберегти конфіг із трею: {err}");
+    }
+    refresh_tray(app, snapshot.enabled);
+    // Сповіщаємо фронтенд (повним конфігом — вікно вирішить, що оновити).
+    let _ = app.emit(EVENT_SETTINGS_CHANGED, snapshot);
+}
+
+/// Команда: прочитати конфіг із диска (джерело істини) й оновити in-memory.
+#[tauri::command]
+fn load_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, String> {
+    let settings = config::load_from_disk(&app)?;
+    *state.settings.lock().expect("AppState отруєно") = settings.clone();
+    Ok(settings)
+}
+
+/// Команда: зберегти конфіг із форми. Валідуємо, пишемо на диск, оновлюємо
+/// in-memory й трей. Повертаємо очищену версію (форма синхронізується).
+#[tauri::command]
+fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    let cleaned = settings.sanitized();
+    config::save_to_disk(&app, &cleaned)?;
+    *state.settings.lock().expect("AppState отруєно") = cleaned.clone();
+    refresh_tray(&app, cleaned.enabled);
+    Ok(cleaned)
+}
+
 /// Точка входу застосунку. Викликається з `main.rs`.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![load_settings, save_settings])
         .setup(|app| {
             let handle = app.handle().clone();
-            let menu = build_tray_menu(&handle, false)?;
+
+            // Завантажуємо конфіг із диска в стан (перший запуск → дефолти).
+            let initial = config::load_from_disk(&handle).unwrap_or_default();
+            let enabled = initial.enabled;
+            *app.state::<AppState>()
+                .settings
+                .lock()
+                .expect("AppState отруєно") = initial;
+
+            let menu = build_tray_menu(&handle, enabled)?;
 
             // Іконку трею беремо з вшитої іконки застосунку (bundle.icon).
             let icon = app
@@ -128,9 +181,15 @@ pub fn run() {
                 .cloned()
                 .expect("default window icon має бути вшита через bundle.icon");
 
+            let tooltip = if enabled {
+                "TypoFix — активний"
+            } else {
+                "TypoFix — на паузі"
+            };
+
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(icon)
-                .tooltip("TypoFix — активний")
+                .tooltip(tooltip)
                 .menu(&menu)
                 // Меню — лише за правим кліком; лівий клік відкриває налаштування.
                 .show_menu_on_left_click(false)
@@ -149,7 +208,7 @@ pub fn run() {
             Ok(())
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_TOGGLE => toggle_pause(app),
+            MENU_TOGGLE => toggle_enabled(app),
             MENU_SETTINGS => show_settings(app),
             MENU_AUTOSTART => {
                 // TODO(autostart): під'єднати tauri-plugin-autostart enable/disable.

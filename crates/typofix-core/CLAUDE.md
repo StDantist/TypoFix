@@ -48,3 +48,24 @@
 - **`exclusions`/`rules` — позичені в `Context`** (`&'a`, як `languages`), щоб не
   клонувати щокроку й не ламати `Debug+Clone`. Порожні набори мають `const fn
   new()` → придатні для `static` у тестах/виклику.
+
+## Готчі самонавчання / undo
+
+- **Критерій відкидання (детермінований):** після того як `step` видав
+  перенабір, він ставить `EngineState.pending_retype`. Якщо **наступна реальна
+  (не синтетична) подія — натиск Backspace (scancode `0x0E`) у тому ж вікні**,
+  це вважається відкиданням. БУДЬ-ЯКА інша подія закриває це вікно undo
+  (= користувач прийняв перенабір). Тобто сигнал = «негайний Backspace одразу
+  після авто-перенабору». Просто й відтворювано у virtual.
+- **Навчений набір живе в `EngineState.learned`, НЕ в `Context`.** Свідоме
+  відхилення від «позичений у Context, як rules»: додавання поля в `Context`
+  зламало б споживачів-конструкторів (`typofix-data/src/eval.rs`). `LearnedExceptions`
+  — owned-стан, який рушій сам поповнює в сесії. Якщо команда захоче Context-
+  borrowed — це узгоджена зміна форми `Context`.
+- **Потік даних:** на відкидання рушій (1) `learn(word)` у `state.learned`
+  (миттєвий ефект у сесії) і (2) емітить `Action::CommitException(word)` — core
+  **нічого не персистить**, це робить app-шар, а на старті заповнює `state.learned`
+  з диска. `word` = `current_text` (те, що користувач наполегливо набрав).
+- **Learned-veto застосовується в `engine`** (після `detector::decide`, перед
+  `replacer::plan`): `decision.switch && learned.contains(current_text) ⇒ switch=false`.
+  Це поряд із detector-veto (`WordRules`), але на рівні рушія, бо набір — у стані.

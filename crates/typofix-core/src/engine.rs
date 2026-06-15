@@ -3,13 +3,27 @@
 //! Тут вирішується, коли штовхати страйк у буфер, коли інвалідувати його, а
 //! коли (на межі слова) запускати детектор і будувати план перенабору.
 
-use crate::{buffer::BufferStore, detector, replacer, Context, EngineState, KeyStroke, Layout};
+use crate::{detector, replacer, Context, EngineState, KeyStroke, Layout};
 use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, Modifiers, WindowInfo};
 
 /// Структурні клавіші — межа слова незалежно від розкладки (scancode set 1).
 const SC_SPACE: u32 = 0x39;
 const SC_ENTER: u32 = 0x1C;
 const SC_TAB: u32 = 0x0F;
+/// Backspace (scancode set 1) — сигнал негайного відкидання перенабору.
+const SC_BACKSPACE: u32 = 0x0E;
+
+/// Останній автоперенабір, що очікує можливого негайного відкидання.
+///
+/// Зберігається в [`EngineState`] між кроками: якщо НАСТУПНА реальна клавіша —
+/// Backspace у тому ж вікні, вважаємо, що користувач відкинув перенабір.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRetype {
+    /// Вікно, в якому стався перенабір.
+    pub(crate) window_key: String,
+    /// Оригінальне слово (те, що було на екрані до виправлення).
+    pub(crate) original_word: String,
+}
 
 /// Класифікація натискання щодо слова.
 enum Class {
@@ -54,18 +68,45 @@ fn window_key(w: &WindowInfo) -> String {
     }
 }
 
-/// Обробити подію межі слова: запустити детектор і, за рішенням, повернути план.
-fn handle_boundary(buffers: &mut BufferStore, key: &str, ctx: &Context) -> Vec<Action> {
-    let actions = {
-        let buf = buffers.for_window(key);
-        if buf.is_empty() {
-            Vec::new()
-        } else {
-            let decision = detector::decide(buf.strokes(), ctx);
-            replacer::plan(&decision)
-        }
-    };
-    buffers.for_window(key).reset();
+/// Чи подія — сигнал відкидання щойно зробленого перенабору: реальний (не
+/// синтетичний) натиск Backspace у тому самому вікні.
+fn is_rejection(ev: &InputEvent, wkey: &str, pending: &PendingRetype) -> bool {
+    if pending.window_key != wkey {
+        return false;
+    }
+    matches!(
+        ev,
+        InputEvent::Key(k)
+            if k.scancode == SC_BACKSPACE
+                && k.dir == KeyDir::Down
+                && !k.is_synthetic
+    )
+}
+
+/// Обробити подію межі слова: запустити детектор (із learned-veto) і, за
+/// рішенням, повернути план + зафіксувати очікування можливого відкидання.
+fn handle_boundary(state: &mut EngineState, wkey: &str, ctx: &Context) -> Vec<Action> {
+    if state.buffers.for_window(wkey).is_empty() {
+        return Vec::new();
+    }
+    // Клонуємо страйки, щоб звільнити позику буфера (далі чіпаємо learned/pending).
+    let strokes: Vec<KeyStroke> = state.buffers.for_window(wkey).strokes().to_vec();
+    let mut decision = detector::decide(&strokes, ctx);
+
+    // Самонавчений veto: слово, яке користувач уже відкидав, не перемикаємо.
+    if decision.switch && state.learned.contains(&decision.current_text) {
+        decision.switch = false;
+    }
+
+    let actions = replacer::plan(&decision);
+    if decision.switch {
+        // Відкриваємо коротке вікно очікування відкидання цього перенабору.
+        state.pending_retype = Some(PendingRetype {
+            window_key: wkey.to_string(),
+            original_word: decision.current_text,
+        });
+    }
+    state.buffers.for_window(wkey).reset();
     actions
 }
 
@@ -78,6 +119,18 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
     }
 
     let wkey = window_key(&ctx.active_window);
+
+    // Самонавчання: чи це відкидання щойно зробленого перенабору?
+    if let Some(pending) = state.pending_retype.as_ref() {
+        if is_rejection(&ev, &wkey, pending) {
+            let word = state.pending_retype.take().unwrap().original_word;
+            state.learned.learn(&word);
+            // Емітимо дію для app-шару (персистенція); core сам не персистить.
+            return vec![Action::CommitException(word)];
+        }
+        // Будь-яка інша подія закриває вікно undo — користувач прийняв перенабір.
+        state.pending_retype = None;
+    }
 
     let key: KeyEvent = match ev {
         InputEvent::Key(k) => k,
@@ -106,7 +159,7 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
     let current_layout = ctx.current_profile().map(|p| &p.layout);
 
     match classify(stroke, current_layout) {
-        Class::Boundary => handle_boundary(&mut state.buffers, &wkey, ctx),
+        Class::Boundary => handle_boundary(state, &wkey, ctx),
         Class::Word => {
             state.buffers.for_window(&wkey).push(stroke);
             Vec::new()

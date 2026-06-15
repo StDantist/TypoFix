@@ -92,6 +92,50 @@ impl ExclusionRules {
     }
 }
 
+/// Самонавчені виключення слів: те, що користувач **відкинув** після
+/// автоперенабору, більше не перемикаємо (захист precision у часі).
+///
+/// Це звичайні дані. Core **нічого не персистить**: він поповнює цей набір
+/// у пам'яті в межах сесії (на сигнал відкидання) і паралельно емітить
+/// [`Action::CommitException`](typofix_platform::Action::CommitException), щоб
+/// app-шар зберіг слово між сесіями й заповнив набір на старті.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LearnedExceptions {
+    words: Vec<String>,
+}
+
+impl LearnedExceptions {
+    /// Порожній набір (const → придатний для `static`/seed).
+    pub const fn new() -> Self {
+        Self { words: Vec::new() }
+    }
+
+    /// Запам'ятати слово (регістронезалежно, без дублікатів).
+    pub fn learn(&mut self, word: &str) -> &mut Self {
+        let w = word.to_lowercase();
+        if !self.words.iter().any(|x| x == &w) {
+            self.words.push(w);
+        }
+        self
+    }
+
+    /// Чи слово вже навчене (не перемикати).
+    pub fn contains(&self, word: &str) -> bool {
+        let w = word.to_lowercase();
+        self.words.iter().any(|x| x == &w)
+    }
+
+    /// Кількість навчених слів.
+    pub fn len(&self) -> usize {
+        self.words.len()
+    }
+
+    /// Чи набір порожній.
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +197,16 @@ mod tests {
         rules.exclude_folder(r"C:\Games\");
         assert!(rules.excludes(&window("a.exe", r"C:\Games\a.exe")));
         assert!(!rules.excludes(&window("x.exe", r"C:\GamesX\x.exe")));
+    }
+
+    #[test]
+    fn learned_exceptions_dedup_and_case_insensitive() {
+        let mut learned = LearnedExceptions::new();
+        learned.learn("ghbdsn");
+        learned.learn("GHBDSN"); // дубль (регістр)
+        assert_eq!(learned.len(), 1);
+        assert!(learned.contains("ghbdsn"));
+        assert!(learned.contains("Ghbdsn"));
+        assert!(!learned.contains("world"));
     }
 }

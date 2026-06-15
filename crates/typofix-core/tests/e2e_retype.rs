@@ -73,6 +73,27 @@ const S: u32 = 0x1F;
 const N: u32 = 0x31;
 const O: u32 = 0x18;
 const SPACE: u32 = 0x39;
+const BACKSPACE: u32 = 0x0E;
+
+/// Прогнати чергу через `core::step`, тримаючи переданий `state` між викликами
+/// (для багатоетапних сценаріїв самонавчання).
+fn drive_state(platform: &mut VirtualPlatform, state: &mut EngineState, langs: &[LanguageProfile]) {
+    drive(platform, |ev, win, layout| {
+        let ctx = Context {
+            active_window: win.clone(),
+            current_layout: layout.clone(),
+            languages: langs,
+            config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules: &NO_RULES,
+        };
+        step(state, ev, &ctx)
+    });
+}
+
+fn typed_privit() -> [InputEvent; 7] {
+    [key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]
+}
 
 #[test]
 fn ghbdsn_in_en_becomes_privit() {
@@ -235,4 +256,107 @@ fn excluded_folder_bypasses_then_works_when_removed() {
         "без виключення — звичайний перенабір"
     );
     assert_eq!(platform.current_layout(), LayoutId::new("uk"));
+}
+
+// --- Самонавчання (undo) ---------------------------------------------------
+
+#[test]
+fn rejection_emits_commit_exception_and_learns_word() {
+    use typofix_platform::Action;
+    let langs = [profile("uk"), profile("en")];
+    let mut state = EngineState::default();
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all(typed_privit());
+    drive_state(&mut platform, &mut state, &langs);
+    assert_eq!(platform.text(), "привіт", "перенабір мав статися");
+
+    // Користувач негайно тисне Backspace → відкидання перенабору.
+    platform.enqueue(key(BACKSPACE));
+    drive_state(&mut platform, &mut state, &langs);
+
+    assert!(
+        state.learned.contains("ghbdsn"),
+        "слово мало стати навченим"
+    );
+    assert_eq!(
+        platform.applied_actions().last(),
+        Some(&Action::CommitException("ghbdsn".into())),
+        "мала емітитись CommitException з оригінальним словом"
+    );
+}
+
+#[test]
+fn learned_word_is_not_switched() {
+    let langs = [profile("uk"), profile("en")];
+    let mut state = EngineState::default();
+    state.learned.learn("ghbdsn"); // ніби завантажено з персистентного сховища
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all(typed_privit());
+    drive_state(&mut platform, &mut state, &langs);
+
+    assert_eq!(platform.text(), "ghbdsn", "навчене слово не перемикати");
+    assert!(platform.applied_actions().is_empty());
+}
+
+#[test]
+fn rejected_word_is_not_reswitched_on_second_appearance() {
+    let langs = [profile("uk"), profile("en")];
+    let mut state = EngineState::default();
+
+    // 1) Перша поява → перенабір.
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all(typed_privit());
+    drive_state(&mut platform, &mut state, &langs);
+    assert_eq!(platform.text(), "привіт");
+
+    // 2) Негайне відкидання.
+    platform.enqueue(key(BACKSPACE));
+    drive_state(&mut platform, &mut state, &langs);
+    assert!(state.learned.contains("ghbdsn"));
+
+    // 3) Друга поява того самого слова (користувач знову в en) → НЕ чіпати.
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all(typed_privit());
+    drive_state(&mut platform, &mut state, &langs);
+    assert_eq!(
+        platform.text(),
+        "ghbdsn",
+        "після відкидання друга поява лишається незмінною"
+    );
+}
+
+#[test]
+fn accepting_retype_does_not_learn() {
+    use typofix_platform::Action;
+    let langs = [profile("uk"), profile("en")];
+    let mut state = EngineState::default();
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn");
+    platform.enqueue_all(typed_privit());
+    drive_state(&mut platform, &mut state, &langs);
+    assert_eq!(platform.text(), "привіт");
+
+    // Замість Backspace користувач просто продовжує набір (приймає перенабір).
+    platform.enqueue(key(0x1E)); // будь-яка літера
+    drive_state(&mut platform, &mut state, &langs);
+
+    assert!(state.learned.is_empty(), "прийнятий перенабір не вчиться");
+    assert!(
+        !platform
+            .applied_actions()
+            .iter()
+            .any(|a| matches!(a, Action::CommitException(_))),
+        "CommitException не має емітитись при прийнятті"
+    );
 }

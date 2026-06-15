@@ -25,7 +25,7 @@ pub mod undo;
 pub use buffer::{BufferStore, WordBuffer};
 pub use detector::{Decision, DetectorConfig, LanguageProfile};
 pub use dict::Dictionary;
-pub use exceptions::ExclusionRules;
+pub use exceptions::{ExclusionRules, LearnedExceptions};
 pub use layout_mapper::{KeyCap, KeyStroke, Layout};
 pub use lm::NgramModel;
 pub use rules::WordRules;
@@ -39,6 +39,11 @@ pub use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, LayoutId, Modif
 pub struct EngineState {
     /// Буфери натискань поточного слова, окремо для кожного вікна.
     pub buffers: BufferStore,
+    /// Самонавчені виключення слів (поповнюються на відкидання перенабору).
+    /// App-шар може заповнити їх на старті з персистентного сховища.
+    pub learned: LearnedExceptions,
+    /// Внутрішнє: останній перенабір, що очікує можливого негайного відкидання.
+    pending_retype: Option<engine::PendingRetype>,
 }
 
 /// Незмінний контекст одного кроку рішення.

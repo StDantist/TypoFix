@@ -24,6 +24,7 @@ use bitflags::bitflags;
 /// підбираються дані (розкладка/LM/словник) і який платформа мапить на
 /// конкретний системний ідентифікатор розкладки.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LayoutId(pub String);
 
 impl LayoutId {
@@ -40,6 +41,7 @@ impl LayoutId {
 
 /// Напрямок події клавіші.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum KeyDir {
     /// Клавішу натиснуто.
     Down,
@@ -67,12 +69,32 @@ bitflags! {
     }
 }
 
+// serde для `Modifiers` робимо вручну (а не через bitflags-фічу): серіалізуємо
+// як сирі бітові прапорці `u16`. Це детерміновано, стабільно у фікстурах і не
+// тягне serde-feature самого bitflags. `from_bits_truncate` тихо ігнорує
+// невідомі біти — допустимо для відтворення записаних сесій.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Modifiers {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_u16(self.bits())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Modifiers {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bits = u16::deserialize(deserializer)?;
+        Ok(Modifiers::from_bits_truncate(bits))
+    }
+}
+
 /// Подія однієї фізичної клавіші.
 ///
 /// Працюємо на рівні **фізичних** кодів (`scancode`), а не символів —
 /// розпізнавання розкладки потребує читати одну й ту саму послідовність
 /// натисків у різних розкладках.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeyEvent {
     /// Апаратний scancode (set 1 на Windows / відповідник на macOS).
     pub scancode: u32,
@@ -97,6 +119,7 @@ pub struct KeyEvent {
 /// У ядро йдуть **усі** події, не лише клавіші: клік, зміна фокуса й рух
 /// курсора інвалідують буфер слова (інакше перенабір зітре не той текст).
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum InputEvent {
     /// Подія клавіші.
     Key(KeyEvent),
@@ -111,6 +134,7 @@ pub enum InputEvent {
 
 /// Інформація про активне вікно/застосунок.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WindowInfo {
     /// Ім'я процесу (напр. `"notepad.exe"`).
     pub process_name: String,
@@ -127,6 +151,7 @@ pub struct WindowInfo {
 /// перенабраний текст іде через [`TypeUnicode`](Action::TypeUnicode) як готові
 /// символи — це усуває гонку з асинхронним перемиканням розкладки.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Action {
     /// Нічого не робити.
     None,

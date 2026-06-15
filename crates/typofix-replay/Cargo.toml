@@ -4,10 +4,14 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Запис/відтворення сесій і golden-фікстури (*.jsonl) для TypoFix. Поки заглушка."
+description = "Запис/відтворення сесій і golden-фікстури (*.jsonl) для TypoFix."
 
 [dependencies]
-typofix-platform.workspace = true
+# Вмикаємо опційну serde-фічу спільних типів — лише тут, не глобально.
+typofix-platform = { workspace = true, features = ["serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

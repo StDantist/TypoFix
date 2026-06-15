@@ -19,8 +19,13 @@ rust-version = "1.80"
 # Спільні зовнішні залежності тримаємо тут, версії — в одному місці.
 bitflags = "2"
 thiserror = "2"
+# serde тримаємо в одному місці; вмикають його лише ті крейти, яким він потрібен
+# (typofix-platform — через ОПЦІЙНУ фічу `serde`, typofix-replay — завжди).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # Внутрішні крейти посилаються одне на одного через workspace-шляхи.
 typofix-platform = { path = "crates/typofix-platform" }
+typofix-platform-virtual = { path = "crates/typofix-platform-virtual" }
 typofix-core = { path = "crates/typofix-core" }
 typofix-data = { path = "crates/typofix-data" }
 

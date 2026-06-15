@@ -9,5 +9,8 @@ description = "Чиста детермінована логіка рішень T
 [dependencies]
 typofix-platform.workspace = true
 
+[dev-dependencies]
+typofix-platform-virtual.workspace = true
+
 [lints]
 workspace = true

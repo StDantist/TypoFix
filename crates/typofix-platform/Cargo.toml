@@ -8,6 +8,14 @@ description = "Авторитетні спільні типи (KeyEvent, InputEv
 
 [dependencies]
 bitflags.workspace = true
+# ОПЦІЙНО: serde вмикається лише фічею `serde`. Дефолтна збірка цього крейту
+# (і всіх, хто залежить від нього без фічі) лишається без serde — нічого не
+# змінюється для інших воркерів. Фічу вмикає `typofix-replay`.
+serde = { workspace = true, optional = true }
+
+[features]
+# Вмикає derive(Serialize/Deserialize) на спільних типах (для record/replay).
+serde = ["dep:serde"]
 
 [lints]
 workspace = true

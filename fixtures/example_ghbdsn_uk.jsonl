@@ -1,0 +1,15 @@
+{"type":"setup","window":{"process_name":"notepad.exe","exe_path":"C:\\Windows\\System32\\notepad.exe","is_fullscreen":false},"layout":"en"}
+{"type":"event","event":{"Key":{"scancode":34,"vk":71,"dir":"Down","modifiers":0,"timestamp_ms":100,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":34,"vk":71,"dir":"Up","modifiers":0,"timestamp_ms":150,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":35,"vk":72,"dir":"Down","modifiers":0,"timestamp_ms":200,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":35,"vk":72,"dir":"Up","modifiers":0,"timestamp_ms":250,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":48,"vk":66,"dir":"Down","modifiers":0,"timestamp_ms":300,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":48,"vk":66,"dir":"Up","modifiers":0,"timestamp_ms":350,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":32,"vk":68,"dir":"Down","modifiers":0,"timestamp_ms":400,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":32,"vk":68,"dir":"Up","modifiers":0,"timestamp_ms":450,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":31,"vk":83,"dir":"Down","modifiers":0,"timestamp_ms":500,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":31,"vk":83,"dir":"Up","modifiers":0,"timestamp_ms":550,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":49,"vk":78,"dir":"Down","modifiers":0,"timestamp_ms":600,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":49,"vk":78,"dir":"Up","modifiers":0,"timestamp_ms":650,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":57,"vk":32,"dir":"Down","modifiers":0,"timestamp_ms":700,"is_synthetic":false,"is_autorepeat":false}}}
+{"type":"event","event":{"Key":{"scancode":57,"vk":32,"dir":"Up","modifiers":0,"timestamp_ms":750,"is_synthetic":false,"is_autorepeat":false}}}

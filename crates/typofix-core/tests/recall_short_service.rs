@@ -1,0 +1,127 @@
+//! Регресія дзеркальної релаксації порога для КОРОТКИХ службових слів
+//! (`detector::decide`, `WordRules::is_short_service`). Принцип «справжнє слово
+//! ↔ біліберда»: коротке (len 1-2) перемикається на одиночний dict-hit, якщо
+//! кандидат — куроване службове слово (whitelist `data/dicts/{lang}.short.txt`)
+//! І джерельний двійник НЕ справжнє слово. Реальні короткі англ. (`is`/`to`) —
+//! НЕ чіпати (їхній двійник у поточній en — теж справжнє слово).
+//!
+//! Вантажить РЕАЛЬНІ моделі/словники + whitelist із `data/`. Якщо їх нема (CI,
+//! gitignored `.bin`/`.fst`) — тест SKIP'иться; герметичне покриття механіки —
+//! в `detector.rs` (юніт-тести `mirror_*`).
+
+use std::path::PathBuf;
+
+use typofix_core::{
+    detector, Context, DetectorConfig, ExclusionRules, KeyStroke, LanguageProfile, Layout,
+    LayoutId, WordRules,
+};
+
+static NO_EXCL: ExclusionRules = ExclusionRules::new();
+
+fn data_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data")
+}
+
+fn real_profiles() -> Option<Vec<LanguageProfile>> {
+    let data = data_dir();
+    let lm_dir = data.join("lm");
+    let dict_dir = data.join("dicts");
+    if !lm_dir.join("uk.bin").exists() {
+        return None;
+    }
+    let mut v = Vec::new();
+    for lang in ["uk", "en"] {
+        v.push(LanguageProfile {
+            id: LayoutId::new(lang),
+            layout: typofix_data::embedded_layout(lang).unwrap(),
+            lm: typofix_data::load_lm(lang, Some(&lm_dir)).unwrap(),
+            dict: typofix_data::load_dict(lang, Some(&dict_dir)).unwrap(),
+        });
+    }
+    Some(v)
+}
+
+/// Фізичні страйки для слова, як його НАБИРАЮТЬ у заданій розкладці (зворотний
+/// індекс): ті самі клавіші дають це слово в `layout` і біліберду в іншій.
+fn strokes_in(layout: &Layout, word: &str) -> Vec<KeyStroke> {
+    word.chars()
+        .map(|c| layout.stroke_for(c).expect("символ має бути в розкладці"))
+        .collect()
+}
+
+fn ctx<'a>(langs: &'a [LanguageProfile], current: &str, rules: &'a WordRules) -> Context<'a> {
+    Context {
+        active_window: Default::default(),
+        current_layout: LayoutId::new(current),
+        languages: langs,
+        config: DetectorConfig::default(),
+        exclusions: &NO_EXCL,
+        rules,
+    }
+}
+
+#[test]
+fn one_letter_service_words_switch() {
+    let Some(langs) = real_profiles() else {
+        eprintln!("SKIP: реальні моделі відсутні");
+        return;
+    };
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let uk = &langs[0].layout;
+    // 1-літерні службові укр.: набрані в EN-розкладці → дзеркало має перемкнути.
+    for w in ["і", "й", "в", "у", "з"] {
+        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
+        assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
+            "1-літерне службове '{w}' має перемкнутись (best={} '{}' conf={:.2})",
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}
+
+#[test]
+fn two_letter_service_words_switch() {
+    let Some(langs) = real_profiles() else {
+        eprintln!("SKIP: реальні моделі відсутні");
+        return;
+    };
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let uk = &langs[0].layout;
+    for w in ["ти", "чи", "ми", "до", "по"] {
+        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
+        assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
+            "2-літерне службове '{w}' має перемкнутись (best={} '{}' conf={:.2})",
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}
+
+#[test]
+fn real_english_short_words_do_not_switch() {
+    let Some(langs) = real_profiles() else {
+        eprintln!("SKIP: реальні моделі відсутні");
+        return;
+    };
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let en = &langs[1].layout;
+    // Реальні короткі англ., набрані в EN → двійник у вихідній en — справжнє
+    // слово → дзеркало НЕ спрацьовує, нічого не чіпаємо (precision-замок).
+    for w in ["a", "i", "is", "to", "it"] {
+        let d = detector::decide(&strokes_in(en, w), &ctx(&langs, "en", &rules));
+        assert!(
+            !d.switch,
+            "реальне англ. '{w}' НЕ має перемикатись (best={} '{}' conf={:.2})",
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}

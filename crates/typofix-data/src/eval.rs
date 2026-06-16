@@ -251,11 +251,35 @@ pub struct Report {
     pub model_source: String,
 }
 
+/// Зібрати [`WordRules`] із курованими whitelist'ами коротких службових слів
+/// (`data/dicts/{lang}.short.txt`) для дзеркальної релаксації порога в детекторі.
+/// Veto/force лишаються порожні (калібруємо чистий детектор). Відсутній файл →
+/// просто менше службових слів (релаксація для мови вимкнена).
+pub fn build_word_rules(langs: &[&str]) -> WordRules {
+    let dict_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data")
+        .join("dicts");
+    let mut rules = WordRules::default();
+    for &lang in langs {
+        let id = LayoutId::new(lang);
+        for w in crate::load_short_words(lang, &dict_dir).unwrap_or_default() {
+            rules.allow_short_service(&id, &w);
+        }
+    }
+    rules
+}
+
 /// Прогнати датасет через детектор і зібрати метрики.
+///
+/// `rules` несе whitelist коротких службових слів (`build_word_rules`) для
+/// дзеркальної релаксації; veto/force в калібруванні лишаються порожні.
 pub fn evaluate(
     examples: &[Example],
     profiles: &[LanguageProfile],
     config: DetectorConfig,
+    rules: &WordRules,
 ) -> Report {
     let mut overall = Confusion::default();
     let mut by_category: BTreeMap<String, Confusion> = BTreeMap::new();
@@ -263,9 +287,8 @@ pub fn evaluate(
     let mut rows_with_unmapped = 0;
     let mut wrong_target_switches = 0;
 
-    // Порожні правила/виключення: калібруємо чистий детектор (veto/force — Фаза 4).
+    // Виключення порожні; правила несуть whitelist коротких службових слів.
     let exclusions = ExclusionRules::default();
-    let rules = WordRules::default();
 
     for ex in examples {
         let current = LayoutId::new(&ex.typed_layout);
@@ -286,7 +309,7 @@ pub fn evaluate(
             languages: profiles,
             config,
             exclusions: &exclusions,
-            rules: &rules,
+            rules,
         };
         let decision = detector::decide(&strokes, &ctx);
 
@@ -365,7 +388,8 @@ fn real_models_present() -> bool {
 pub fn run_default() -> io::Result<Report> {
     let examples = load_dataset(&default_dataset_path())?;
     let profiles = build_profiles().map_err(|e| io::Error::other(format!("профілі: {e}")))?;
-    let mut report = evaluate(&examples, &profiles, DetectorConfig::default());
+    let rules = build_word_rules(&["uk", "en"]);
+    let mut report = evaluate(&examples, &profiles, DetectorConfig::default(), &rules);
     report.model_source = if real_models_present() {
         "реальний корпус (data/lm,data/dicts)".to_string()
     } else {

@@ -90,6 +90,13 @@ pub struct DetectorConfig {
     /// перевищувала LM-складову поточної розкладки щонайменше на цей запас —
     /// тобто за кандидата має «голосувати» і мовна модель, а не лише словник.
     pub short_word_lm_margin: f64,
+    /// **Стеля LM джерельного двійника для дзеркальної релаксації** коротких
+    /// слів: дзеркальна гілка (службове слово ↔ біліберда) спрацьовує лише якщо
+    /// LM-складова ПОТОЧНОГО тексту (двійника у вихідній мові) НИЖЧА за цю межу —
+    /// тобто двійник фонотактично неправдоподібний (реальне слово мав би LM
+    /// вище). Це і є умова «двійник НЕ справжнє слово» (поряд із «не в словнику»).
+    /// Дефолт `0.0`: біліберда має LM ≪ 0; справжні короткі слова — LM > 0.
+    pub short_word_twin_lm_max: f64,
 }
 
 impl Default for DetectorConfig {
@@ -102,6 +109,7 @@ impl Default for DetectorConfig {
             min_switch_len: 2,
             short_word_max_len: 2,
             short_word_lm_margin: 2.0,
+            short_word_twin_lm_max: 0.0,
         }
     }
 }
@@ -229,13 +237,18 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
             lm: f64::NEG_INFINITY,
         });
 
+    // Чи ПОТОЧНИЙ текст (двійник у вихідній мові) — реальне слово в її словнику.
+    // Потрібно для дзеркальної релаксації: форсимо коротке лише коли двійник НЕ
+    // справжнє слово (інакше це легітимний короткий ввід — `is`/`db` — не чіпати).
+    let current_is_dict = current
+        .map(|p| p.dict.contains(&current_text))
+        .unwrap_or(false);
+
     // Початково найкраща — поточна (щоб за відсутності переваги нічого не міняти).
     let mut best = ctx.current_layout.clone();
     let mut best_text = current_text.clone();
     let mut best_score = current_score;
-    let mut best_is_dict = current
-        .map(|p| p.dict.contains(&current_text))
-        .unwrap_or(false);
+    let mut best_is_dict = current_is_dict;
 
     for p in ctx.languages {
         let text = p.layout.interpret(strokes);
@@ -260,11 +273,31 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let vetoed = ctx.rules.vetoes(&current_text, &best_text);
     let forced = ctx.rules.forces(&current_text);
 
+    // Стандартний шлях: довжина + поріг + (для коротких) LM-перевага кандидата.
+    let standard_ok = len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok;
+
+    // **Дзеркальна релаксація для дуже коротких слів (len ≤ short_word_max_len).**
+    // Принцип «справжнє слово ↔ біліберда»: перемикаємо коротке, якщо
+    //   (а) кандидат — куроване СЛУЖБОВЕ слово цільової мови (whitelist у `rules`,
+    //       не довільний збіг у повному словнику — інакше шум `ат`/`ді` від
+    //       корпусу пробивав би поріг, як код-токени `fn`/`ls`); І
+    //   (б) джерельний двійник НЕ справжнє слово: його немає у словнику вихідної
+    //       мови (`!current_is_dict`) І його LM нижча за стелю (фонотактично
+    //       неправдоподібний). Тоді `і`/`ти`/`чи` форсяться на одиночний
+    //       dict-hit, а реальні короткі `is`/`to`/`db` — НІ (їхній двійник — теж
+    //       справжнє слово → умова (б) хибна). Поріг/min_len/LM-маржу обходимо
+    //       (одиночного dict-hit достатньо), але НЕ veto і НЕ `best≠current`.
+    let mirror_ok = len <= cfg.short_word_max_len
+        && best_is_dict
+        && ctx.rules.is_short_service(&best, &best_text)
+        && !current_is_dict
+        && current_score.lm < cfg.short_word_twin_lm_max
+        && confidence > cfg.base_threshold;
+
     let switch = current.is_some()
         && best != ctx.current_layout
         && !vetoed
-        && (forced
-            || (len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok));
+        && (forced || standard_ok || mirror_ok);
 
     BranchEval {
         best,
@@ -473,7 +506,8 @@ mod tests {
             3,
             0.5,
         );
-        let dict = Dictionary::from_words(["ат", "ді", "то"]).unwrap();
+        // `о` — однолітерне службове слово для тестів дзеркальної релаксації.
+        let dict = Dictionary::from_words(["ат", "ді", "то", "о"]).unwrap();
         LanguageProfile {
             id: LayoutId::new("uk"),
             layout,
@@ -709,5 +743,90 @@ mod tests {
             "коротке слово з підтримкою LM має перемкнутися (conf={})",
             d.confidence
         );
+    }
+
+    // --- Дзеркальна релаксація для коротких службових слів --------------------
+
+    /// Whitelist коротких службових слів (через `WordRules`) для тестів дзеркала.
+    fn rules_with_short_service(entries: &[(&str, &str)]) -> WordRules {
+        let mut r = WordRules::new();
+        for (lang, word) in entries {
+            r.allow_short_service(&LayoutId::new(*lang), word);
+        }
+        r
+    }
+
+    #[test]
+    fn mirror_switches_whitelisted_short_service_word() {
+        // `fn` (en, не в en-словнику, слабка LM) → uk «ат» у словнику. САМОГО
+        // dict-hit мало (стандартний guard блокує), але якщо «ат» у whitelist
+        // службових слів — дзеркало форсить перемикання на одиночний dict-hit.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "ат")]);
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x21, 0x31]), &ctx); // en "fn" / uk "ат"
+        assert_eq!(d.current_text, "fn");
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert_eq!(d.best_text, "ат");
+        assert!(
+            d.switch,
+            "whitelisted службове слово має перемкнутися на dict-hit (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn mirror_requires_whitelist_not_lone_dict_hit() {
+        // Той самий `fn`→«ат», але «ат» НЕ у whitelist (whitelist має інше слово).
+        // Дзеркало НЕ спрацьовує: довільний збіг у повному словнику (шум корпусу
+        // `ат`/`ді`) не має перемикати — інакше код-токени ламали б precision.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "то")]); // «ат» відсутнє
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x21, 0x31]), &ctx); // en "fn" / uk "ат"
+        assert!(
+            !d.switch,
+            "не-whitelisted збіг у словнику не має перемикати (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn mirror_does_not_switch_when_twin_is_real_word() {
+        // Дзеркальна умова (б): джерельний двійник МУСИТЬ бути не-словом. Тут
+        // робимо `fn` реальним en-словом (додаємо в en-словник) — навіть із
+        // whitelisted «ат» дзеркало НЕ спрацьовує (це легітимний короткий ввід).
+        let en = {
+            let mut p = en_code_profile();
+            p.dict = Dictionary::from_words(["function", "list", "fn"]).unwrap();
+            p
+        };
+        let langs = [en, uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "ат")]);
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x21, 0x31]), &ctx); // en "fn" (тепер слово) / uk "ат"
+        assert!(
+            !d.switch,
+            "двійник-справжнє-слово не має перемикатися (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn mirror_switches_one_letter_service_word() {
+        // Однолітерне службове слово: `j`(en, не-слово) → «о»(uk, whitelist).
+        // min_switch_len(2) звичайно блокує len=1; дзеркало це обходить.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "о")]);
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x24]), &ctx); // en "j" / uk "о"
+        assert_eq!(d.current_text, "j");
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert_eq!(d.best_text, "о");
+        assert!(d.switch, "однолітерне службове слово має перемкнутися");
+
+        // Без whitelist — лишається заблокованим (контроль).
+        let plain = ctx_with(&langs, "en");
+        assert!(!decide(&strokes(&[0x24]), &plain).switch);
     }
 }

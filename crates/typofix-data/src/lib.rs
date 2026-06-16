@@ -308,6 +308,30 @@ pub fn load_dict(lang: &str, override_dir: Option<&Path>) -> Result<Dictionary, 
     sample_dict(lang)
 }
 
+// --- Whitelist коротких службових слів (`{lang}.short.txt`) ----------------
+
+/// Розпарсити whitelist коротких службових слів: один lowercase-рядок = слово,
+/// `#` = коментар, порожні рядки ігноруються. Формат — `data/dicts/{lang}.short.txt`
+/// (деталі: `data/CLAUDE.md`). Повертає слова як є (без додаткового lowercase —
+/// файл уже lowercase; матчинг у `WordRules` усе одно регістронезалежний).
+pub fn parse_short_words(src: &str) -> Vec<String> {
+    src.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Завантажити whitelist коротких службових слів мови з `dir/{lang}.short.txt`.
+/// Файлу немає → порожній список (дзеркальна релаксація для мови просто вимкнена).
+pub fn load_short_words(lang: &str, dir: &Path) -> std::io::Result<Vec<String>> {
+    let path = dir.join(format!("{lang}.short.txt"));
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(parse_short_words(&std::fs::read_to_string(path)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,10 +4,22 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Реалізація Platform для Windows (хук, ін'єкція, розкладка). Поки заглушка."
+description = "Реалізація Platform для Windows (хук WH_KEYBOARD_LL, SendInput, ToUnicodeEx, перемикання розкладки)."
 
 [dependencies]
 typofix-platform.workspace = true
+
+# WinAPI лише на Windows-цілі; на інших ОС крейт компілюється як тонка заглушка
+# (щоб `cargo build --workspace` лишався зеленим у CI на Linux/macOS).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Accessibility",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+] }
 
 [lints]
 workspace = true

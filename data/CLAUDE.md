@@ -23,9 +23,22 @@
     `{uk,en}.words.txt`. Тести й дефолт будують модель/FST із них **у рантаймі**
     (`sample_lm`/`sample_dict`), бо `.bin`/`.fst` не комітяться. `load_lm`/`load_dict`
     беруть `override_dir/{lang}.{bin,fst}`, інакше fallback на зразок.
-  - **FOLLOW-UP (окрема задача):** повний корпус uk/en (десятки МБ) — тренувати
-    тим самим `train_lm`/`build_dict` і класти у `lm/`,`dicts/`. Можливо з
-    допомогою користувача через проксі (великі дампи сюди не тягнемо).
+  - **Повний корпус (зроблено).** Джерело — Leipzig Corpora Collection
+    (Wikipedia uk/en, публічний текст, 100K речень кожна). Пайплайн:
+    1. `bash data/fetch_corpora.sh` — завантажує дампи в `corpora/` (gitignored).
+    2. `python data/clean_corpus.py` — монолінгвальне очищення (лише цільовий
+       алфавіт+апострофи, як `lm::tokenize`) → `corpora/{lang}.clean.txt` +
+       `corpora/{lang}.words.txt` (частота ≥5).
+    3. `cargo run -p typofix-data --bin train_models` → `lm/{lang}.bin`,
+       `dicts/{lang}.fst` (gitignored).
+    4. `cargo run -p typofix-data --bin calibrate` — метрики (бере реальні
+       моделі, fallback на зразки).
+    Обсяг: uk 1.36M токенів / 26.6K слів, en 2.05M / 21.3K; `.bin` ≈0.2–0.4 МБ
+    (чистий моноалфавіт → vocab uk=36, en=29). **Приріст метрик** (на eval-датасеті,
+    `DetectorConfig::default`): recall 45.6%→**94.4%**, F1 62.6%→**96.3%**,
+    precision 100%→**98.3%** (2 FP — короткі код-токени `fn`/`ls`, що збігаються з
+    короткими uk-словами у словнику; решта FN — короткі слова на межі порогу →
+    орієнтир для калібрування `threshold` у core).
 - `eval/` — розмічений датасет калібрування: позитив (крякозябри↔правильні) +
   **негативний клас** (легітимні uk/en/змішані/сленг/код, які НЕ перемикати).
   Без реальних секретів (див. `fixtures/CLAUDE.md`).

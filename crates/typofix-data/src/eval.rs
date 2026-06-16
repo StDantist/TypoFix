@@ -79,16 +79,28 @@ pub fn load_dataset(path: &Path) -> io::Result<Vec<Example>> {
     Ok(out)
 }
 
-/// Побудувати профілі uk+en зі зразкових моделей і вбудованих розкладок.
+/// Побудувати профілі uk+en для калібрування.
+///
+/// Бере **реальні** натреновані моделі з `data/lm/{lang}.bin` і
+/// `data/dicts/{lang}.fst`, якщо вони є (`train_models`), інакше — fallback на
+/// вбудовані зразки (`sample_*`). Так калібрування показує реальні числа
+/// локально, а в CI (де `.bin`/`.fst` gitignored) лишається відтворюваним.
 pub fn build_profiles() -> Result<Vec<LanguageProfile>, crate::ModelError> {
+    let data = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data");
+    let lm_dir = data.join("lm");
+    let dict_dir = data.join("dicts");
+
     let mut profiles = Vec::new();
     for lang in ["uk", "en"] {
         let layout = crate::embedded_layout(lang).expect("вбудована розкладка має парситися");
         profiles.push(LanguageProfile {
             id: LayoutId::new(lang),
             layout,
-            lm: crate::sample_lm(lang)?,
-            dict: crate::sample_dict(lang)?,
+            lm: crate::load_lm(lang, Some(&lm_dir))?,
+            dict: crate::load_dict(lang, Some(&dict_dir))?,
         });
     }
     Ok(profiles)
@@ -235,6 +247,8 @@ pub struct Report {
     pub rows_with_unmapped: usize,
     /// Скільки перемикань відбулося не на ту мову (підмножина FP).
     pub wrong_target_switches: usize,
+    /// Джерело моделей (для шапки звіту): "реальний корпус" чи "зразки".
+    pub model_source: String,
 }
 
 /// Прогнати датасет через детектор і зібрати метрики.
@@ -332,14 +346,32 @@ pub fn evaluate(
         config,
         rows_with_unmapped,
         wrong_target_switches,
+        model_source: String::new(),
     }
+}
+
+/// Чи є реальні натреновані моделі (`data/lm/*.bin`) — для шапки звіту.
+fn real_models_present() -> bool {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("data")
+        .join("lm")
+        .join("uk.bin")
+        .exists()
 }
 
 /// Зручність: завантажити дефолтний датасет, побудувати профілі, прогнати.
 pub fn run_default() -> io::Result<Report> {
     let examples = load_dataset(&default_dataset_path())?;
     let profiles = build_profiles().map_err(|e| io::Error::other(format!("профілі: {e}")))?;
-    Ok(evaluate(&examples, &profiles, DetectorConfig::default()))
+    let mut report = evaluate(&examples, &profiles, DetectorConfig::default());
+    report.model_source = if real_models_present() {
+        "реальний корпус (data/lm,data/dicts)".to_string()
+    } else {
+        "вбудовані зразки (дрібні → числа грубі)".to_string()
+    };
+    Ok(report)
 }
 
 // --- Форматування звіту ----------------------------------------------------
@@ -358,12 +390,8 @@ pub fn format_report(report: &Report) -> String {
     let mut s = String::new();
     let o = &report.overall;
 
-    writeln!(s, "TypoFix — калібрувальний baseline детектора").unwrap();
-    writeln!(
-        s,
-        "(зразкові ДРІБНІ моделі → числа грубі; це орієнтир, не ціль)\n"
-    )
-    .unwrap();
+    writeln!(s, "TypoFix — калібрувальні метрики детектора").unwrap();
+    writeln!(s, "моделі: {}\n", report.model_source).unwrap();
     writeln!(
         s,
         "config: lm_weight={} dict_bonus={} base_threshold={} short_word_extra={} min_switch_len={}",

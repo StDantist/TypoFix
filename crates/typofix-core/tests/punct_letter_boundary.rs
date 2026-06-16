@@ -60,6 +60,7 @@ fn profiles() -> Vec<LanguageProfile> {
             "щоб",
         ])
         .unwrap(),
+        freq: None,
     };
     let en = LanguageProfile {
         id: LayoutId::new("en"),
@@ -70,6 +71,7 @@ fn profiles() -> Vec<LanguageProfile> {
             "function", "hood", "food", "mood",
         ])
         .unwrap(),
+        freq: None,
     };
     vec![uk, en]
 }

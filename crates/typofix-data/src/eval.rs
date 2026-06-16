@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use typofix_core::detector::{self, DetectorConfig};
 use typofix_core::{
-    Context, ExclusionRules, KeyStroke, LanguageProfile, Layout, LayoutId, WordRules,
+    Context, ExclusionRules, FrequencyMap, KeyStroke, LanguageProfile, Layout, LayoutId, WordRules,
 };
 
 /// Один розмічений приклад із `dataset.jsonl` (схема — `data/eval/CLAUDE.md`).
@@ -96,11 +96,22 @@ pub fn build_profiles() -> Result<Vec<LanguageProfile>, crate::ModelError> {
     let mut profiles = Vec::new();
     for lang in ["uk", "en"] {
         let layout = crate::embedded_layout(lang).expect("вбудована розкладка має парситися");
+        // Частотна мапа — опційна: є `{lang}.freq.fst` → градуйований сигнал,
+        // нема → лише baseline dict-бонус (CI без даних лишається відтворюваним).
+        let freq_path = dict_dir.join(format!("{lang}.freq.fst"));
+        let freq = if freq_path.exists() {
+            Some(FrequencyMap::from_fst_map(crate::load_freq_map_file(
+                &freq_path,
+            )?))
+        } else {
+            None
+        };
         profiles.push(LanguageProfile {
             id: LayoutId::new(lang),
             layout,
             lm: crate::load_lm(lang, Some(&lm_dir))?,
             dict: crate::load_dict(lang, Some(&dict_dir))?,
+            freq,
         });
     }
     Ok(profiles)
@@ -320,7 +331,20 @@ pub fn evaluate(
                 let text = p.layout.interpret(&strokes);
                 let lm = p.lm.score(&text);
                 let in_dict = p.dict.contains(&text);
-                let score = config.lm_weight * lm + if in_dict { config.dict_bonus } else { 0.0 };
+                // Дзеркалить приватну `score()`: baseline dict-бонус + частотна
+                // надбавка `freq_weight·max(0, lp − freq_floor)` для слів у мапі.
+                let freq_term = if in_dict {
+                    p.freq
+                        .as_ref()
+                        .and_then(|m| m.log_prob(&text))
+                        .map(|lp| config.freq_weight * (lp - config.freq_floor).max(0.0))
+                        .unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                let score = config.lm_weight * lm
+                    + if in_dict { config.dict_bonus } else { 0.0 }
+                    + freq_term;
                 Candidate {
                     lang: p.id.as_str().to_string(),
                     text,

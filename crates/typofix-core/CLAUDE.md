@@ -58,6 +58,47 @@
   Інваріант стереже `calibrated_short_word_threshold_holds_recall_margin` (hermetic)
   + `tests/recall_plausible_nonword.rs` (реальні моделі: `rjk`→`кол` TP, негативи NO).
 
+## Частотно-зважений dict-бонус — `FrequencyMap` (готча!)
+
+**Неочевидне:** коли ОБИДВА двійники — реальні слова в обох словниках (`ну`↔`ye`,
+`от`↔рідкісне), бінарні dict-бонуси скасовуються, LM майже рівні → детектор НЕ
+перемикав. Бінарного «є/нема» замало — потрібні ЧАСТОТИ. `FrequencyMap` (`freq.rs`,
+обгортка над `fst::Map`) дає `LanguageProfile.freq: Option<FrequencyMap>` —
+ГРАДУЙОВАНИЙ сигнал поверх `Dictionary`.
+
+- **Формула (`score`):** `total = lm_weight·lm + dict_bonus? + freq_term?`, де
+  `freq_term = freq_weight · max(0, lp − freq_floor)`, `lp = ln(count) − ln(total)`
+  (**log-ймовірність**, не сирий count). `CandidateScore.freq` тримається ОКРЕМО
+  (як `lm`), щоб коротко-словний гейт міг вимагати частотної переваги.
+- **ЧОМУ log-ймовірність, а не `ln(count)` (критично!):** корпуси різних мов мають
+  різний масштаб (EN `the`≈22.7M vs UK `що`≈65k — EN-корпус на ~2 порядки більший).
+  Сирий count/`ln(count)` систематично підіграв би EN. Нормалізація на `ln(total)`
+  (= частка в корпусі) робить мови зіставними: `ну`(lp≈−5.85) ≫ `ye`(lp≈−11.1),
+  хоча counts близькі (12k/10k). `ln_total` рахується ОДИН раз при `from_fst_map`.
+- **`freq_floor = −9.0` (калібровано на реальних даних):** поріг log-ймовірності,
+  нижче якого надбавка = 0. Чисто розділяє реальні часті слова (`ну`−5.85, `от`
+  −6.66, `we`−4.62, `us`−6.24 — ВИЩЕ) від кодового шуму/рідкісних (`ат`−13.7,
+  `ді`−11.7, `ye`−11.1, `db`−14.8, `vec`−18 — НИЖЧЕ). Саме це тримає precision:
+  код-двійники лишаються на baseline (надбавка 0), реальні слова дістають перевагу.
+- **None ≠ «не слово» (залізно):** dict-член БЕЗ freq-запису (рідкісна флексія
+  хвоста VESUM) дістає рівно `dict_bonus` (baseline), частота НЕ карає. Стереже
+  `dict_member_without_freq_keeps_baseline_bonus`.
+- **Коротко-словний гейт — ТРЕТІЙ шлях «проголосувати»:** `short_word_ok = len >
+  max || lm_confidence > lm_margin || freq_confidence > short_word_freq_margin`
+  (дефолт `2.0`). `ну`(len2) не має LM-переваги, але `freq_confidence`
+  (`best.freq − current.freq` ≈ 3.2) відкриває гейт; стандартний `threshold(len)`
+  і `best≠current`/veto лишаються в силі. Код-токени (`fn`→`ат`) НЕ проходять:
+  `ат` нижче floor → `freq_confidence≈0`.
+- **Дані:** `data/dicts/{lang}.freq.fst` (gitignored), вантажиться через
+  `typofix_data::load_freq_map_file` → `FrequencyMap::from_fst_map` у
+  `eval::build_profiles` і `runtime.rs` (м'яка деградація: нема файлу → `None` →
+  лише baseline). **typofix-data НЕ редагувалась** (лише споживання її API).
+- **Калібрування (реальний eval, 383 прикл.):** precision **100%→100%** (0 FP),
+  recall **95.5%→98.9%**, F1 97.7%→**99.4%**; FN 8→2 (резерв `ut`→`ге`/`ps`→`зі`
+  — рідкісні укр., нижче floor; свідомо консервативно, бо precision > recall).
+  Стереже: юніти `freq_*`/`no_freq_layer_*` (герметичні) + `tests/recall_freq_weighted.rs`
+  (реальні моделі: `ну`→`ye` TP, `us`/`is`/`to`/`we` precision-гард) + юніти `freq.rs`.
+
 ## Дзеркальна релаксація порога для КОРОТКИХ службових слів (готча!)
 
 **Неочевидне:** короткі службові слова (`і`,`ти`,`чи`,`от`,`we`,`is`-двійники)

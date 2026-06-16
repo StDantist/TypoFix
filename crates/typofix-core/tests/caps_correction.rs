@@ -40,6 +40,7 @@ fn profile(id: &str) -> LanguageProfile {
         layout: typofix_data::embedded_layout(id).expect("розкладка"),
         lm: typofix_data::sample_lm(id).expect("LM"),
         dict: typofix_data::sample_dict(id).expect("словник"),
+        freq: None,
     }
 }
 

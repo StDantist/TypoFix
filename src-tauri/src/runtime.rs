@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use typofix_core::{DetectorConfig, ExclusionRules, LanguageProfile, LayoutId, WordRules};
+use typofix_core::{
+    DetectorConfig, ExclusionRules, FrequencyMap, LanguageProfile, LayoutId, WordRules,
+};
 
 use crate::config::{AppSettings, LanguagePair};
 
@@ -99,11 +101,20 @@ pub fn load_language_profiles(
             typofix_data::load_layout(lang, layout_dir.as_deref()).map_err(|e| e.to_string())?;
         let lm = typofix_data::load_lm(lang, lm_dir.as_deref()).map_err(|e| e.to_string())?;
         let dict = typofix_data::load_dict(lang, dict_dir.as_deref()).map_err(|e| e.to_string())?;
+        // Частотна мапа — опційна (м'яка деградація): є `{lang}.freq.fst` →
+        // градуйований сигнал; нема/помилка → лише baseline dict-бонус.
+        let freq = dict_dir
+            .as_deref()
+            .map(|d| d.join(format!("{lang}.freq.fst")))
+            .filter(|p| p.exists())
+            .and_then(|p| typofix_data::load_freq_map_file(&p).ok())
+            .map(FrequencyMap::from_fst_map);
         profiles.push(LanguageProfile {
             id: LayoutId::new(lang),
             layout,
             lm,
             dict,
+            freq,
         });
     }
     Ok(profiles)

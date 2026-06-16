@@ -16,7 +16,7 @@
 //! коротке, перевага над поточною інтерпретацією перевищує `threshold(len)` і
 //! немає вето правил. **Принцип: за сумніву НЕ перемикати** (precision > recall).
 
-use crate::{Context, Dictionary, KeyStroke, Layout, LayoutId, NgramModel};
+use crate::{Context, Dictionary, FrequencyMap, KeyStroke, Layout, LayoutId, NgramModel};
 
 /// Ресурси однієї мови, потрібні детектору. Власник — оркестратор/тест; у
 /// `Context` потрапляє позиченим зрізом (core нічого не вантажить сам).
@@ -28,8 +28,15 @@ pub struct LanguageProfile {
     pub layout: Layout,
     /// Мовна n-gram модель.
     pub lm: NgramModel,
-    /// Словник для бусту впевненості.
+    /// Словник для бусту впевненості (бінарне членство).
     pub dict: Dictionary,
+    /// **Частотна мапа** (опційно): градуйований сигнал поверх `dict`. `None` —
+    /// частотного шару немає (працює лише baseline dict-бонус). Слово, що Є в
+    /// `dict`, але якого НЕМАЄ в `freq`, отримує лише baseline (частота не карає —
+    /// вона лише ДОДАЄ зважування зверху для слів, що Є в мапі). Див. [`score`].
+    ///
+    /// [`score`]: LanguageProfile::score
+    pub freq: Option<FrequencyMap>,
 }
 
 /// Розкладений бал кандидата: повний (`total`) і **лише LM-складова** (`lm`).
@@ -39,30 +46,53 @@ pub struct LanguageProfile {
 /// [`DetectorConfig::short_word_lm_margin`]).
 #[derive(Debug, Clone, Copy)]
 struct CandidateScore {
-    /// Повний бал: `lm_weight·lm + (dict ? dict_bonus : 0)`.
+    /// Повний бал: `lm_weight·lm + dict_bonus? + freq_term?`.
     total: f64,
-    /// Лише зважена LM-складова: `lm_weight·lm` (без бонусу словника).
+    /// Лише зважена LM-складова: `lm_weight·lm` (без бонусів словника/частоти).
     lm: f64,
+    /// Лише **частотна** надбавка (`freq_term`, завжди ≥ 0). Тримається окремо,
+    /// щоб коротко-словний гейт міг вимагати ЧАСТОТНОЇ переваги кандидата —
+    /// аналогічно до того, як `lm` тримається окремо для LM-переваги. Для слова
+    /// поза `dict` або поза `freq` дорівнює 0.
+    freq: f64,
 }
 
 impl LanguageProfile {
     /// Бал кандидата для заданого тексту (вже інтерпретованого в його розкладці).
+    ///
+    /// **Частотно-зважений dict-бонус:** слово зі словника отримує `dict_bonus`
+    /// (baseline). Якщо воно ще й є в частотній мапі — ДОДАЄМО зважену
+    /// log-ймовірність понад поріг: `freq_weight · max(0, lp − freq_floor)`, де
+    /// `lp = ln(count) − ln(total)` (нормалізована частка, зіставна між мовами).
+    /// Поріг `freq_floor` відсікає рідкісні слова/шум корпусу (їхня надбавка = 0,
+    /// тобто вони лишаються на baseline — як dict-член без частоти). Так часте
+    /// слово дає БІЛЬШИЙ бонус за рідкісне, і `ну`(часте) б'є `ye`(рідкісне).
     fn score(&self, text: &str, cfg: &DetectorConfig) -> CandidateScore {
         if text.is_empty() {
             return CandidateScore {
                 total: f64::NEG_INFINITY,
                 lm: f64::NEG_INFINITY,
+                freq: 0.0,
             };
         }
         let lm = cfg.lm_weight * self.lm.score(text);
-        let bonus = if self.dict.contains(text) {
-            cfg.dict_bonus
+        let (dict_bonus, freq_term) = if self.dict.contains(text) {
+            // Baseline зберігається ЗАВЖДИ для dict-члена. Частота лише додає
+            // зверху для слів, що Є в мапі й частіші за поріг (інакше +0).
+            let ft = self
+                .freq
+                .as_ref()
+                .and_then(|m| m.log_prob(text))
+                .map(|lp| cfg.freq_weight * (lp - cfg.freq_floor).max(0.0))
+                .unwrap_or(0.0);
+            (cfg.dict_bonus, ft)
         } else {
-            0.0
+            (0.0, 0.0)
         };
         CandidateScore {
-            total: lm + bonus,
+            total: lm + dict_bonus + freq_term,
             lm,
+            freq: freq_term,
         }
     }
 }
@@ -73,8 +103,18 @@ impl LanguageProfile {
 pub struct DetectorConfig {
     /// Вага лог-ймовірності LM (`w1`).
     pub lm_weight: f64,
-    /// Бонус за наявність слова у словнику (`w2`-еквівалент).
+    /// Бонус за наявність слова у словнику (`w2`-еквівалент, baseline для
+    /// dict-члена незалежно від частоти).
     pub dict_bonus: f64,
+    /// Вага частотної надбавки: множник на `max(0, lp − freq_floor)`, де `lp` —
+    /// log-ймовірність слова (нормалізована частка в корпусі). `0.0` вимикає
+    /// частотний шар (лишається плаский `dict_bonus`).
+    pub freq_weight: f64,
+    /// Поріг log-ймовірності, нижче якого частотної надбавки немає (слово рідкісне
+    /// / шум корпусу → лишається на baseline). У одиницях `ln(частка)`: `−9.0`
+    /// ≈ частка `1.2·10⁻⁴`. Калібровано так, щоб реальні часті слова (`ну`≈−5.85,
+    /// `от`≈−6.66) були ВИЩЕ порога, а код-двійники (`ат`≈−13.7, `ye`≈−11.1) — НИЖЧЕ.
+    pub freq_floor: f64,
     /// Базовий поріг переваги (для довгих слів).
     pub base_threshold: f64,
     /// Додаток до порогу, обернено пропорційний довжині (карає короткі слова).
@@ -90,6 +130,13 @@ pub struct DetectorConfig {
     /// перевищувала LM-складову поточної розкладки щонайменше на цей запас —
     /// тобто за кандидата має «голосувати» і мовна модель, а не лише словник.
     pub short_word_lm_margin: f64,
+    /// **Альтернатива LM-маржі для коротких слів — ЧАСТОТНА маржа.** Коли обидва
+    /// двійники — реальні слова (dict-бонуси скасовуються, LM майже рівні —
+    /// `ну`↔`ye`), LM-гейт не пускає, але якщо ЧАСТОТНА перевага кандидата
+    /// (`best.freq − current.freq`) перевищує цей запас, коротко-словний гейт
+    /// відкривається. Так часте слово б'є рідкісного двійника. Стандартний поріг
+    /// `threshold(len)` і `best≠current`/veto лишаються в силі.
+    pub short_word_freq_margin: f64,
     /// **Стеля LM джерельного двійника для дзеркальної релаксації** коротких
     /// слів: дзеркальна гілка (службове слово ↔ біліберда) спрацьовує лише якщо
     /// LM-складова ПОТОЧНОГО тексту (двійника у вихідній мові) НИЖЧА за цю межу —
@@ -104,11 +151,14 @@ impl Default for DetectorConfig {
         Self {
             lm_weight: 1.0,
             dict_bonus: 4.0,
+            freq_weight: 1.0,
+            freq_floor: -9.0,
             base_threshold: 1.0,
             short_word_extra: 4.0,
             min_switch_len: 2,
             short_word_max_len: 2,
             short_word_lm_margin: 2.0,
+            short_word_freq_margin: 2.0,
             short_word_twin_lm_max: 0.0,
         }
     }
@@ -241,6 +291,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
         .unwrap_or(CandidateScore {
             total: f64::NEG_INFINITY,
             lm: f64::NEG_INFINITY,
+            freq: 0.0,
         });
 
     // Чи ПОТОЧНИЙ текст (двійник у вихідній мові) — реальне слово в її словнику.
@@ -272,7 +323,14 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // LM-перевага кандидата БЕЗ бонусу словника: для дуже коротких слів вимагаємо,
     // щоб за кандидата голосувала і сама модель, а не лише збіг у словнику.
     let lm_confidence = best_score.lm - current_score.lm;
-    let short_word_ok = len > cfg.short_word_max_len || lm_confidence > cfg.short_word_lm_margin;
+    // ЧАСТОТНА перевага кандидата (надбавки log-ймовірності, обидві ≥ 0): коли
+    // обидва двійники — реальні слова (LM майже рівні, dict-бонуси скасовуються),
+    // саме частота розрізняє часте слово від рідкісного (`ну`≫`ye`). Це другий —
+    // частотний — спосіб «проголосувати» за коротке слово, поряд із LM-маржею.
+    let freq_confidence = best_score.freq - current_score.freq;
+    let short_word_ok = len > cfg.short_word_max_len
+        || lm_confidence > cfg.short_word_lm_margin
+        || freq_confidence > cfg.short_word_freq_margin;
 
     // Правила рівня слова: veto (захист precision) має пріоритет; force дозволяє
     // перемкнути в обхід порогу/довжини (але не в обхід veto чи best≠current).
@@ -509,6 +567,7 @@ mod tests {
             layout,
             lm,
             dict,
+            freq: None,
         }
     }
 
@@ -538,6 +597,7 @@ mod tests {
             layout,
             lm,
             dict,
+            freq: None,
         }
     }
 
@@ -590,6 +650,7 @@ mod tests {
             layout,
             lm,
             dict,
+            freq: None,
         }
     }
 
@@ -622,6 +683,7 @@ mod tests {
             layout,
             lm,
             dict,
+            freq: None,
         }
     }
 
@@ -963,6 +1025,7 @@ mod tests {
             layout,
             lm,
             dict,
+            freq: None,
         }
     }
 
@@ -1145,5 +1208,161 @@ mod tests {
         assert!(!d.caps_only, "це layout-перемикання, не caps-корекція");
         assert_eq!(d.best, LayoutId::new("uk"));
         assert_eq!(d.best_text, "ПРивіт", "регістр зберігається (follow-up)");
+    }
+
+    // --- Частотно-зважений dict-бонус (`score`, `FrequencyMap`) ---------------
+    // Цільовий баг: `ну`↔`ye` — ОБИДВА реальні слова у словниках (dict-бонуси
+    // скасовуються, LM ~рівні) → бінарний шар не перемикав. Частота розрізняє.
+    // Фіз-позиції: sc 0x15 (en `y` / uk `н`), 0x12 (en `e` / uk `у`).
+
+    /// Зібрати `FrequencyMap` зі списку (слово, count) — герметично, без typofix-data.
+    fn freq_map(entries: &[(&str, u64)]) -> FrequencyMap {
+        use std::collections::BTreeMap;
+        let sorted: BTreeMap<String, u64> = entries
+            .iter()
+            .map(|(w, c)| (w.to_lowercase(), *c))
+            .collect();
+        FrequencyMap::from_fst_map(fst::Map::from_iter(sorted).unwrap())
+    }
+
+    /// En-профіль зі словом `ye` у словнику + керована частотна мапа.
+    fn freq_en_profile(freq: Option<FrequencyMap>) -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x15, KeyCap::letter('y', 'Y')),
+                (0x12, KeyCap::letter('e', 'E')),
+            ],
+        );
+        // LM бачила «ye» — реальне (архаїчне) слово, тож воно не біліберда.
+        let lm = NgramModel::train("ye ye old ye shall ye", 3, 0.5);
+        let dict = Dictionary::from_words(["ye", "old"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq,
+        }
+    }
+
+    /// Uk-профіль зі словом `ну` у словнику + керована частотна мапа.
+    fn freq_uk_profile(freq: Option<FrequencyMap>) -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x15, KeyCap::letter('н', 'Н')),
+                (0x12, KeyCap::letter('у', 'У')),
+            ],
+        );
+        let lm = NgramModel::train("ну ну та ну добре ну", 3, 0.5);
+        let dict = Dictionary::from_words(["ну", "та"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq,
+        }
+    }
+
+    /// Корпусні масштаби з реального світу: UK-корпус малий, EN — на 2 порядки
+    /// більший, тож сирі counts `ну`(12k)≈`ye`(10k), але нормалізована частка
+    /// `ну` ≫ `ye`.
+    fn uk_freq_common_nu() -> FrequencyMap {
+        freq_map(&[("ну", 12_000), ("та", 80_000), ("zzz", 4_300_000)])
+    }
+    fn en_freq_rare_ye() -> FrequencyMap {
+        freq_map(&[("ye", 10_000), ("old", 900_000), ("zzz", 680_000_000)])
+    }
+
+    #[test]
+    fn freq_switches_nu_over_archaic_ye() {
+        // ну(часте)↔ye(рідкісне): обидва у словниках; частота відкриває гейт.
+        let langs = [
+            freq_en_profile(Some(en_freq_rare_ye())),
+            freq_uk_profile(Some(uk_freq_common_nu())),
+        ];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x15, 0x12]), &ctx); // en "ye" / uk "ну"
+        assert_eq!(d.current_text, "ye");
+        assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == "ну",
+            "часте 'ну' має перемкнутись над рідкісним 'ye' (switch={} best={} conf={:.2})",
+            d.switch,
+            d.best.as_str(),
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn no_freq_layer_leaves_nu_ye_tie_unresolved() {
+        // Контроль причинності: без частотного шару той самий кейс НЕ перемикає
+        // (бінарні dict-бонуси скасовуються, LM-маржа коротка) — це й був баг.
+        let langs = [freq_en_profile(None), freq_uk_profile(None)];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x15, 0x12]), &ctx);
+        assert_eq!(d.current_text, "ye");
+        assert!(
+            !d.switch,
+            "без частоти 'ну'↔'ye' не перемикається (conf={:.2})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn freq_precision_guard_common_en_stays_when_uk_twin_rare() {
+        // Дзеркало кейсу: тепер РІДКІСНЕ укр. «ну», ЧАСТЕ англ. «ye» (на екрані,
+        // поточна en). Частота захищає легітимний англ. ввід → НЕ перемикати.
+        let uk_rare = freq_map(&[("ну", 30), ("та", 80_000), ("zzz", 4_300_000)]);
+        let en_common = freq_map(&[("ye", 5_000_000), ("old", 900_000), ("zzz", 680_000_000)]);
+        let langs = [
+            freq_en_profile(Some(en_common)),
+            freq_uk_profile(Some(uk_rare)),
+        ];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x15, 0x12]), &ctx);
+        assert_eq!(d.current_text, "ye");
+        assert!(
+            !d.switch,
+            "часте англ. 'ye' (рідкісний укр. двійник) НЕ чіпати (best={} conf={:.2})",
+            d.best.as_str(),
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn dict_member_without_freq_keeps_baseline_bonus() {
+        // Семантика None ≠ «не слово»: слово Є у словнику, але немає freq-запису →
+        // отримує рівно baseline `dict_bonus`, частота НЕ карає. Перевіряємо, що
+        // бал = lm + dict_bonus (freq-надбавка = 0), а не нижче.
+        let cfg = DetectorConfig::default();
+        // Мапа без слова «ну» (інші слова є) → log_prob(ну)=None → надбавка 0.
+        let map = freq_map(&[("та", 80_000), ("zzz", 4_300_000)]);
+        let uk = freq_uk_profile(Some(map));
+        let with_freq = uk.score("ну", &cfg);
+        let baseline = freq_uk_profile(None).score("ну", &cfg);
+        assert_eq!(
+            with_freq.total, baseline.total,
+            "dict-член без freq-запису має лишатись на baseline (без штрафу)"
+        );
+        assert_eq!(with_freq.freq, 0.0, "немає freq-запису → надбавка 0");
+        // А слово, що Є в мапі й часте, отримує СТРОГО більший бал.
+        let common = freq_uk_profile(Some(uk_freq_common_nu())).score("ну", &cfg);
+        assert!(
+            common.total > baseline.total && common.freq > 0.0,
+            "часте слово з freq-записом має давати більший бонус за baseline"
+        );
+    }
+
+    #[test]
+    fn freq_floor_clamps_rare_words_to_baseline() {
+        // Слово у мапі, але РІДКІСНЕ (log-ймовірність нижча за freq_floor) →
+        // надбавка обрізається до 0 (шум корпусу не дає переваги).
+        let cfg = DetectorConfig::default();
+        // ну з мізерним count у великому корпусі → lp ≪ floor(-9).
+        let rare = freq_map(&[("ну", 2), ("zzz", 4_300_000)]);
+        let s = freq_uk_profile(Some(rare)).score("ну", &cfg);
+        assert_eq!(s.freq, 0.0, "рідкісне слово нижче freq_floor → надбавка 0");
     }
 }

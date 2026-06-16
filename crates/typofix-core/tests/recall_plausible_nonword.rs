@@ -34,6 +34,7 @@ fn real_profiles() -> Option<Vec<LanguageProfile>> {
             layout: typofix_data::embedded_layout(lang).unwrap(),
             lm: typofix_data::load_lm(lang, Some(&lm_dir)).unwrap(),
             dict: typofix_data::load_dict(lang, Some(&dict_dir)).unwrap(),
+            freq: None,
         });
     }
     Some(v)

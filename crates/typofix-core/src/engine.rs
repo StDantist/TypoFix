@@ -55,23 +55,27 @@ fn is_command_combo(m: Modifiers) -> bool {
         && !m.contains(Modifiers::ALTGR)
 }
 
-/// Класифікувати натискання. Структурні клавіші — завжди межа; інші — за
-/// символом у поточній розкладці (літера/апостроф → слово, решта → межа). Без
-/// поточної розкладки нелітерні структурні все одно ловляться, а решта
-/// накопичується (детектор без поточного профілю однаково не перемкне).
-fn classify(stroke: KeyStroke, current_layout: Option<&Layout>) -> Class {
+/// Класифікувати натискання. Структурні клавіші (пробіл/Enter/Tab) — завжди межа.
+///
+/// **Готча — пунктуація-що-є-літерою-в-кандидаті.** Межу НЕ можна визначати лише
+/// за поточною розкладкою: клавіша `,` (`0x33`) в `en` — пунктуація, але в `uk` —
+/// літера `б`. Якби ми вважали її твердою межею, буфер рвався б посеред слова
+/// (`lj,ht`→`добре` неможливо було б розпізнати). Тому страйк — частина слова,
+/// якщо він літера хоч у ОДНІЙ увімкненій розкладці; твердою межею лишаються лише
+/// справжні роздільники й символи, що НЕ літера в жодній розкладці (цифри/`-`/`=`
+/// тощо). Дизамбігуацію «літера чи хвостовий роздільник» робить уже детектор на
+/// справжній межі (див. [`detector::decide`]).
+fn classify(stroke: KeyStroke, ctx: &Context) -> Class {
     if matches!(stroke.scancode, SC_SPACE | SC_ENTER | SC_TAB) {
         return Class::Boundary;
     }
-    match current_layout.and_then(|l| l.char_at(stroke.scancode, stroke.modifiers)) {
-        Some(ch) if ch.is_alphabetic() || ch == '\'' || ch == '’' => Class::Word,
-        Some(_) => Class::Boundary, // цифра/пунктуація
-        None => {
-            // Невідома клавіша без символу (F-клавіші, Delete тощо) → межа
-            // (безпечно завершує слово). Backspace сюди не доходить — його
-            // перехоплює окрема гілка в `step` (поп/інвалідація).
-            Class::Boundary
-        }
+    if detector::letter_in_any_layout(stroke, ctx) {
+        Class::Word
+    } else {
+        // Цифра/символ, що не літера в жодній розкладці, або невідома клавіша
+        // (F-клавіші, Delete) → межа, що безпечно завершує слово. Backspace сюди
+        // не доходить — його перехоплює окрема гілка в `step` (поп/інвалідація).
+        Class::Boundary
     }
 }
 
@@ -198,7 +202,7 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
     let stroke = KeyStroke::from(&key);
     let current_layout = ctx.current_profile().map(|p| &p.layout);
 
-    match classify(stroke, current_layout) {
+    match classify(stroke, ctx) {
         Class::Boundary => {
             let separator = separator_char(stroke, current_layout);
             handle_boundary(state, &wkey, ctx, separator)

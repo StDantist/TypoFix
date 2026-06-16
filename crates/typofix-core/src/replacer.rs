@@ -39,12 +39,16 @@ pub fn plan(decision: &Decision, separator: Option<char>) -> Vec<Action> {
     }
 
     let word_len = decision.current_text.chars().count() as u32;
-    // Друкований роздільник уже на екрані → стерти його разом зі словом.
-    let delete_count = word_len + u32::from(separator.is_some());
+    // Хвостовий суфікс (пунктуація-роздільник, що йде дослівно після слова) уже на
+    // екрані в поточній розкладці → теж стерти й повернути.
+    let suffix_len = decision.suffix.chars().count() as u32;
+    // Друкований роздільник-тригер уже на екрані → стерти його разом зі словом.
+    let delete_count = word_len + suffix_len + u32::from(separator.is_some());
 
     let mut typed = decision.best_text.clone();
+    typed.push_str(&decision.suffix); // дослівний хвостовий роздільник (напр. ",")
     if let Some(sep) = separator {
-        typed.push(sep); // повертаємо роздільник за виправленим словом
+        typed.push(sep); // повертаємо роздільник-тригер за виправленим словом
     }
 
     let mut actions = Vec::with_capacity(3);
@@ -68,6 +72,20 @@ mod tests {
             current_text: current.to_string(),
             switch,
             confidence: 0.0,
+            suffix: String::new(),
+        }
+    }
+
+    fn decision_with_suffix(
+        switch: bool,
+        current: &str,
+        best_text: &str,
+        best: &str,
+        suffix: &str,
+    ) -> Decision {
+        Decision {
+            suffix: suffix.to_string(),
+            ..decision(switch, current, best_text, best)
         }
     }
 
@@ -132,5 +150,22 @@ mod tests {
     fn preserves_apostrophe() {
         let actions = plan(&decision(true, "g'znm", "п'ять", "uk"), Some(' '));
         assert_eq!(actions[2], Action::TypeUnicode("п'ять ".into()));
+    }
+
+    #[test]
+    fn trailing_punct_suffix_is_deleted_and_restored() {
+        // `ghbdsn,` + пробіл: на екрані "ghbdsn, " (8). Гілка-роздільник трактує
+        // кому як дослівний суфікс → стерти слово(6)+кому(1)+пробіл(1)=8, набрати
+        // "привіт" + "," + " ". Кома НЕ з'їдається як «б».
+        let d = decision_with_suffix(true, "ghbdsn", "привіт", "uk", ",");
+        let actions = plan(&d, Some(' '));
+        assert_eq!(
+            actions,
+            vec![
+                Action::DeleteChars(8),
+                Action::SwitchLayout(LayoutId::new("uk")),
+                Action::TypeUnicode("привіт, ".into()),
+            ]
+        );
     }
 }

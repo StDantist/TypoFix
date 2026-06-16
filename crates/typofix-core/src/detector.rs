@@ -133,14 +133,76 @@ pub struct Decision {
     pub switch: bool,
     /// Перевага найкращої над поточною (best.score − current.score); для дебагу/тестів.
     pub confidence: f64,
+    /// **Хвостовий суфікс**, що зберігається ДОСЛІВНО між виправленим словом і
+    /// тригерним роздільником: екранна (поточна розкладка) інтерпретація хвостових
+    /// пунктуаційних клавіш, які гілка-роздільник трактувала як роздільники, а не
+    /// літери (напр. `","` у `ghbdsn,`→`привіт,`). Порожній у звичайному випадку.
+    /// `replacer` дописує його після `best_text` і враховує в кількості стирання.
+    pub suffix: String,
 }
 
-/// Розглянути буферизоване слово й вирішити, чи перемикати.
+/// Чи символ — частина слова (літера або апостроф). Спільний критерій для межі
+/// слова в [`crate::engine`] і для дизамбігуації пунктуації-що-є-літерою тут.
+pub(crate) fn is_word_char(ch: char) -> bool {
+    ch.is_alphabetic() || ch == '\'' || ch == '’'
+}
+
+/// Чи дає цей страйк ЛІТЕРУ хоч у одній увімкненій розкладці (включно з поточною).
 ///
-/// `strokes` — фізичні натискання слова (layout-незалежні). Якщо поточної
-/// розкладки немає серед `ctx.languages`, безпечно не перемикаємо (не знаємо,
-/// що саме на екрані → не можна коректно стерти).
-pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
+/// Це й є критерій «пунктуація-що-є-літерою»: клавіша на кшталт `,` (scancode
+/// `0x33`) у `en` — пунктуація, але в `uk` — літера `б`. Такі клавіші не можна
+/// наївно вважати твердою межею слова (інакше буфер рветься посеред слова), і
+/// саме їх гілка-роздільник може стрипнути як хвостовий роздільник.
+pub(crate) fn letter_in_any_layout(stroke: KeyStroke, ctx: &Context) -> bool {
+    ctx.languages.iter().any(|p| {
+        p.layout
+            .char_at(stroke.scancode, stroke.modifiers)
+            .is_some_and(is_word_char)
+    })
+}
+
+/// Скільки ХВОСТОВИХ страйків — «пунктуація-що-є-літерою-в-кандидаті»: у ПОТОЧНІЙ
+/// розкладці не літера (виглядають як роздільник на екрані), але літера хоч у
+/// одній кандидатній. Лише такі хвостові страйки гілка-роздільник може стрипнути.
+/// Цифри/справжні символи (не літера НІДЕ) зупиняють підрахунок — їх не стрипаємо.
+fn trailing_separator_candidates(strokes: &[KeyStroke], ctx: &Context) -> usize {
+    let Some(cur) = ctx.current_profile() else {
+        return 0;
+    };
+    let mut k = 0;
+    for s in strokes.iter().rev() {
+        let cur_is_letter = cur
+            .layout
+            .char_at(s.scancode, s.modifiers)
+            .is_some_and(is_word_char);
+        // Справжня літера в поточній розкладці — точно не роздільник.
+        if cur_is_letter {
+            break;
+        }
+        // Не літера НІДЕ (цифра/символ) — теж не стрипаємо (це не пунктуація-літера).
+        if !letter_in_any_layout(*s, ctx) {
+            break;
+        }
+        k += 1;
+    }
+    k
+}
+
+/// Внутрішня оцінка однієї гілки інтерпретації страйків (без урахування хвостової
+/// дизамбігуації — її робить [`decide`]).
+struct BranchEval {
+    best: LayoutId,
+    best_text: String,
+    current_text: String,
+    switch: bool,
+    confidence: f64,
+    /// Чи `best_text` є у словнику обраної мови (потрібно для precision-замка).
+    best_is_dict: bool,
+}
+
+/// Оцінити одну послідовність страйків в усіх розкладках і вирішити (за тими ж
+/// правилами порогу/довжини/veto, що й раніше), чи варто перемикати.
+fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let cfg = &ctx.config;
 
     let current = ctx.current_profile();
@@ -158,6 +220,9 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     let mut best = ctx.current_layout.clone();
     let mut best_text = current_text.clone();
     let mut best_score = current_score;
+    let mut best_is_dict = current
+        .map(|p| p.dict.contains(&current_text))
+        .unwrap_or(false);
 
     for p in ctx.languages {
         let text = p.layout.interpret(strokes);
@@ -165,6 +230,7 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
         if sc.total > best_score.total {
             best_score = sc;
             best = p.id.clone();
+            best_is_dict = p.dict.contains(&text);
             best_text = text;
         }
     }
@@ -187,12 +253,80 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
         && (forced
             || (len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok));
 
-    Decision {
+    BranchEval {
         best,
         best_text,
         current_text,
         switch,
         confidence,
+        best_is_dict,
+    }
+}
+
+/// Розглянути буферизоване слово й вирішити, чи перемикати.
+///
+/// `strokes` — фізичні натискання слова (layout-незалежні). Якщо поточної
+/// розкладки немає серед `ctx.languages`, безпечно не перемикаємо (не знаємо,
+/// що саме на екрані → не можна коректно стерти).
+///
+/// ## Дизамбігуація пунктуації-що-є-літерою на межі слова
+/// Якщо у хвості буфера є клавіші, що в поточній розкладці виглядають як
+/// пунктуація, але в кандидатній є літерами (`,`=`б`, `.`=`ю`, `;`=`ж`, `[`=`х`,
+/// `]`=`ї`, `\`=`ґ`), розглядаємо ДВІ гілки:
+/// - **гілка-літера:** усі страйки — літери (`lj,ht`→`добре`);
+/// - **гілка-роздільник:** хвостові пунктуаційні страйки стрипнуто й трактовано
+///   як роздільники (`ghbdsn,`→`привіт` + суфікс `","`).
+///
+/// **Precision-замок:** гілку-літеру приймаємо ЛИШЕ якщо вона перемикає, дає
+/// СЛОВНИКОВЕ слово й має вищу впевненість за гілку-роздільник. Інакше —
+/// безпечна гілка-роздільник (стара поведінка: пунктуація лишається роздільником).
+/// За рівної впевненості перемагає гілка-роздільник (консервативно). Внутрішня
+/// пунктуація-літера завжди лишається літерою (стрипаємо тільки хвіст).
+pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
+    let k = trailing_separator_candidates(strokes, ctx);
+    let letter = eval_branch(strokes, ctx);
+
+    // Немає хвостової пунктуації-літери → одна гілка (стара поведінка, без суфікса).
+    if k == 0 {
+        return Decision {
+            best: letter.best,
+            best_text: letter.best_text,
+            current_text: letter.current_text,
+            switch: letter.switch,
+            confidence: letter.confidence,
+            suffix: String::new(),
+        };
+    }
+
+    let split = strokes.len() - k;
+    let sep = eval_branch(&strokes[..split], ctx);
+    let suffix = ctx
+        .current_profile()
+        .map(|p| p.layout.interpret(&strokes[split..]))
+        .unwrap_or_default();
+
+    // Precision-замок: трактуємо хвостову пунктуацію як ЛІТЕРИ лише за словникового
+    // слова й вищої впевненості; інакше лишаємо її роздільником (безпечно).
+    let use_letter = letter.switch && letter.best_is_dict && letter.confidence > sep.confidence;
+
+    if use_letter {
+        Decision {
+            best: letter.best,
+            best_text: letter.best_text,
+            current_text: letter.current_text,
+            switch: letter.switch,
+            confidence: letter.confidence,
+            suffix: String::new(),
+        }
+    } else {
+        Decision {
+            best: sep.best,
+            best_text: sep.best_text,
+            current_text: sep.current_text,
+            switch: sep.switch,
+            confidence: sep.confidence,
+            suffix,
+        }
     }
 }
 

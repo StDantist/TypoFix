@@ -26,6 +26,25 @@ import re
 
 HERE = os.path.dirname(__file__)
 CORP = os.path.join(HERE, "corpora")
+DICTS = os.path.join(HERE, "dicts")
+
+
+def load_short_whitelist(lang):
+    """Короткі службові слова (1-2 літери) з data/dicts/{lang}.short.txt.
+
+    Потрібні, щоб пускати 1-літерні слова крізь фільтр довжини нижче (інакше
+    легітимні `і, й, в, у, з, о, а, я, є, ж` гинуть як OCR-шум). # — коментар.
+    """
+    path = os.path.join(DICTS, f"{lang}.short.txt")
+    words = set()
+    if not os.path.exists(path):
+        return words
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            w = line.strip()
+            if w and not w.startswith("#"):
+                words.add(w.lower())
+    return words
 
 # Український алфавіт (без російських ы/ъ/э/ё) + апострофи.
 UK_LETTERS = set("абвгґдеєжзиіїйклмнопрстуфхцчшщьюя")
@@ -83,7 +102,7 @@ def clean_sentences(path, letters):
     return out_lines, kept_lines, tokens_out
 
 
-def clean_words(path, letters):
+def clean_words(path, letters, short_whitelist):
     words = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -98,7 +117,8 @@ def clean_words(path, letters):
             if count < MIN_COUNT:
                 continue
             ct = clean_token(word, letters)
-            if ct and len(ct) >= 2:
+            # 1-літерні пускаємо ЛИШЕ з whitelist (інакше OCR-шум/латиниця).
+            if ct and (len(ct) >= 2 or ct in short_whitelist):
                 words.append(ct)
     return sorted(set(words))
 
@@ -116,7 +136,7 @@ def main():
         with open(out_corpus, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(lines) + "\n")
 
-        words = clean_words(word_path, cfg["letters"])
+        words = clean_words(word_path, cfg["letters"], load_short_whitelist(lang))
         out_words = os.path.join(CORP, f"{lang}.words.txt")
         with open(out_words, "w", encoding="utf-8", newline="\n") as f:
             f.write("\n".join(words) + "\n")

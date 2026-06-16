@@ -59,12 +59,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         // --- Словник ---
         let words_raw = std::fs::read_to_string(&words_path)?;
-        let words: Vec<&str> = words_raw
+        let mut words: Vec<String> = words_raw
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty())
+            .map(str::to_owned)
             .collect();
-        let dict = build_dict(words.iter().copied())?;
+        // Влити whitelist коротких службових слів (data/dicts/{lang}.short.txt),
+        // щоб 1-2-літерні точно були у словнику незалежно від корпусу/частоти.
+        // FST дедуплікує, тож повтори безпечні.
+        let short_path = dict_dir.join(format!("{lang}.short.txt"));
+        if let Ok(short_raw) = std::fs::read_to_string(&short_path) {
+            for line in short_raw.lines() {
+                let w = line.trim();
+                if !w.is_empty() && !w.starts_with('#') {
+                    words.push(w.to_owned());
+                }
+            }
+        }
+        let dict = build_dict(words.iter().map(String::as_str))?;
         let dict_path = dict_dir.join(format!("{lang}.fst"));
         save_dict(&dict, &dict_path)?;
 

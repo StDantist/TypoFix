@@ -31,7 +31,10 @@ pub use windows_impl::WindowsPlatform;
 // Публічні запити без побічних ефектів (безпечні для автотестів і app-шару):
 // розкладка з ОС (`ToUnicodeEx`) та активне вікно.
 #[cfg(windows)]
-pub use layout::{char_for_active_layout, char_for_layout, current_layout_id};
+pub use layout::{
+    char_for_active_layout, char_for_layout, current_hkl_bits, current_layout_id,
+    installed_layout_ids, probe_layout_methods, LayoutProbe, MethodResult,
+};
 #[cfg(windows)]
 pub use window::foreground_window_info;
 

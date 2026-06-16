@@ -61,6 +61,22 @@
    `installed_hkl_for_layout_id`; немає мови в системі → `None` (НЕ перемикаємо, НЕ
    інсталюємо). Запит символів і перемикання йдуть лише через неї.
 
+10. **🔴 `GetKeyboardLayout(fg_tid)` БРЕШЕ для UWP/консольних вікон** —
+    `GetForegroundWindow` віддає обгортку `ApplicationFrameWindow`, чий потік має
+    дефолтну розкладку, а не реальну (підтверджено: при активній EN UWP-Notepad
+    читалась uk → детектор не перемикав). **Продакшн-метод — M2 (`current_hkl`
+    = `m2_hkl`):** `GetGUIThreadInfo(fgTid).hwndFocus` дає СПРАВЖНЄ фокусне вікно
+    (всередині UWP-хоста) → читаємо `GetKeyboardLayout` ЙОГО потоку. Fallback:
+    немає `hwndFocus` → потік самого `GetForegroundWindow()`; tid=0 →
+    `GetKeyboardLayout(0)`. Емпірично (`layoutprobe`, десктоп-вікно): M1/M2/M3
+    рівноцінні, M4=наш потік (хибний); **M2 обрано заради UWP/console**.
+    Діагностику (`probe_layout_methods`, режими `layoutprobe`/`layout`) ЛИШЕНО —
+    знадобиться, якщо M2 десь не дотягне. `AttachThreadInput`-шлях (M3) лишається
+    лише в діагностиці, НЕ в продакшні (його `GetKeyboardLayout(0)` читав наш
+    потік → завжди en). Оптимізація (поки НЕ зроблено): кешувати розкладку й
+    оновлювати по `EVENT_SYSTEM_FOREGROUND` + на межі слова, замість запиту на
+    кожен виклик. Зараз пріоритет — коректність; кеш — follow-up.
+
 ## Що перевірено автоматично (частина A, безпечно, без вводу в систему)
 `cargo test -p typofix-platform-windows` (15 тестів) реально б'є по WinAPI:
 - `ToUnicodeEx` серед **уже встановлених** розкладок (`installed_hkl_for_layout_id`,

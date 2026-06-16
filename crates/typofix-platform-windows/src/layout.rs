@@ -12,11 +12,14 @@
 //!   ([`flush_dead_key`]). Так запит лишається без побічних ефектів.
 
 use typofix_platform::{LayoutId, Modifiers};
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardLayout, GetKeyboardLayoutList, MapVirtualKeyExW, ToUnicodeEx, HKL, MAPVK_VK_TO_VSC,
     MAPVK_VSC_TO_VK_EX,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, GUITHREADINFO,
+};
 
 use crate::keystate::fill_key_state;
 
@@ -42,17 +45,51 @@ fn primary_langid_for_id(id: &LayoutId) -> Option<u16> {
     }
 }
 
-/// `HKL`, активний у потоці вікна на передньому плані (а не нашого потоку).
-pub fn current_hkl() -> HKL {
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        let tid = if hwnd.is_null() {
-            0
-        } else {
-            GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
-        };
-        GetKeyboardLayout(tid)
+/// RAII-guard: тримає `AttachThreadInput(me, target, TRUE)` і ГАРАНТОВАНО
+/// відчіпляє у `Drop` (навіть на ранньому виході/панці). Симетричність —
+/// критична: лишити потік приєднаним = зламати ввід обом.
+struct InputAttach {
+    me: u32,
+    target: u32,
+    attached: bool,
+}
+
+impl InputAttach {
+    /// Спробувати приєднатися до `target`. Гард на власний потік і нульовий tid.
+    fn new(me: u32, target: u32) -> Self {
+        let attached = target != 0
+            && target != me
+            && unsafe {
+                AttachThreadInput(me, target, 1 /* TRUE */)
+            } != 0;
+        Self {
+            me,
+            target,
+            attached,
+        }
     }
+}
+
+impl Drop for InputAttach {
+    fn drop(&mut self) {
+        if self.attached {
+            unsafe {
+                AttachThreadInput(self.me, self.target, 0 /* FALSE */)
+            };
+        }
+    }
+}
+
+/// `HKL` **активного вікна переднього плану** (а не системний дефолт).
+///
+/// **Готча (емпірично підтверджено `layoutprobe`):** `GetKeyboardLayout(fg_tid)`
+/// для UWP/консольних вікон бреше — `GetForegroundWindow` віддає обгортку
+/// `ApplicationFrameWindow`, чий потік має дефолтну розкладку, а не реальну.
+/// Рятує **метод M2** ([`m2_hkl`]): `GetGUIThreadInfo(fgTid).hwndFocus` дає
+/// справжнє фокусне вікно (всередині UWP-хоста) → читаємо розкладку ЙОГО потоку.
+/// Для звичайних вікон M1/M2/M3 рівноцінні; M2 обрано саме заради UWP/console.
+pub fn current_hkl() -> HKL {
+    m2_hkl()
 }
 
 /// `langid` (молодше слово HKL) → наш [`LayoutId`], матч за `PRIMARYLANGID`.
@@ -69,6 +106,126 @@ pub fn layout_id_for_hkl(hkl: HKL) -> LayoutId {
 /// Поточна активна розкладка ОС як наш [`LayoutId`].
 pub fn current_layout_id() -> LayoutId {
     layout_id_for_hkl(current_hkl())
+}
+
+/// Діагностика (для `live_spike`): сирі біти HKL активного вікна як `usize`.
+/// Не для продакшн-логіки — лише друк/дебаг.
+pub fn current_hkl_bits() -> usize {
+    current_hkl() as usize
+}
+
+// =========================================================================
+// ДІАГНОСТИКА: 4 методи визначення розкладки активного вікна (для layoutprobe).
+// Мета — емпірично знайти, який метод СЛІДУЄ за реальною розкладкою на цій
+// машині (UWP/консольні вікна ламають частину з них). Це НЕ продакшн-шлях —
+// після вибору переможця `current_hkl` перепишемо на нього.
+// =========================================================================
+
+/// Результат одного методу: змаплений [`LayoutId`] + сирі біти HKL.
+#[derive(Debug, Clone)]
+pub struct MethodResult {
+    pub id: LayoutId,
+    pub hkl_bits: usize,
+}
+
+/// Результати всіх 4 методів за один прохід (порівнювати поряд).
+#[derive(Debug, Clone)]
+pub struct LayoutProbe {
+    /// M1: `GetKeyboardLayout(tid(GetForegroundWindow))` — поточний (ламається на UWP).
+    pub m1: MethodResult,
+    /// M2: через `GetGUIThreadInfo`→`hwndFocus`→його потік.
+    pub m2: MethodResult,
+    /// M3: `AttachThreadInput` + `GetKeyboardLayout(fgThread)`.
+    pub m3: MethodResult,
+    /// M4: `GetKeyboardLayout(0)` (наш потік — контроль).
+    pub m4: MethodResult,
+}
+
+fn result_of(hkl: HKL) -> MethodResult {
+    MethodResult {
+        id: layout_id_for_hkl(hkl),
+        hkl_bits: hkl as usize,
+    }
+}
+
+/// tid потоку, що володіє вікном переднього плану (0, якщо вікна немає).
+fn foreground_tid() -> u32 {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
+        }
+    }
+}
+
+/// M1 — поточний (зламаний) метод.
+fn m1_hkl() -> HKL {
+    unsafe { GetKeyboardLayout(foreground_tid()) }
+}
+
+/// M2 — розкладка потоку, що володіє `hwndFocus` (через `GetGUIThreadInfo`).
+fn m2_hkl() -> HKL {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        let fg_tid = if hwnd.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(hwnd, std::ptr::null_mut())
+        };
+        let mut gti: GUITHREADINFO = std::mem::zeroed();
+        gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        let focus_hwnd = if fg_tid != 0 && GetGUIThreadInfo(fg_tid, &mut gti) != 0 {
+            if gti.hwndFocus.is_null() {
+                hwnd
+            } else {
+                gti.hwndFocus
+            }
+        } else {
+            hwnd
+        };
+        let focus_tid = if focus_hwnd.is_null() {
+            fg_tid
+        } else {
+            GetWindowThreadProcessId(focus_hwnd, std::ptr::null_mut())
+        };
+        GetKeyboardLayout(focus_tid)
+    }
+}
+
+/// M3 — `AttachThreadInput` до fg-потоку, тоді `GetKeyboardLayout(fgThread)`.
+fn m3_hkl() -> HKL {
+    unsafe {
+        let fg_tid = foreground_tid();
+        let me = GetCurrentThreadId();
+        let _attach = InputAttach::new(me, fg_tid);
+        // Свідомо НЕ 0: читаємо саме цільовий потік (на відміну від current_hkl).
+        GetKeyboardLayout(fg_tid)
+    }
+}
+
+/// M4 — наш потік (контроль; має бути стабільним).
+fn m4_hkl() -> HKL {
+    unsafe { GetKeyboardLayout(0) }
+}
+
+/// Порахувати всі 4 методи за один прохід.
+pub fn probe_layout_methods() -> LayoutProbe {
+    LayoutProbe {
+        m1: result_of(m1_hkl()),
+        m2: result_of(m2_hkl()),
+        m3: result_of(m3_hkl()),
+        m4: result_of(m4_hkl()),
+    }
+}
+
+/// [`LayoutId`] усіх **уже встановлених** розкладок (для вибору цілей у probe).
+pub fn installed_layout_ids() -> Vec<LayoutId> {
+    installed_hkls()
+        .into_iter()
+        .map(layout_id_for_hkl)
+        .collect()
 }
 
 /// Список `HKL` усіх **уже встановлених** розкладок (через `GetKeyboardLayoutList`).

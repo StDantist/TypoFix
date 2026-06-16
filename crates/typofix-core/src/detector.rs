@@ -98,7 +98,7 @@ impl Default for DetectorConfig {
             lm_weight: 1.0,
             dict_bonus: 4.0,
             base_threshold: 1.0,
-            short_word_extra: 6.0,
+            short_word_extra: 4.0,
             min_switch_len: 2,
             short_word_max_len: 2,
             short_word_lm_margin: 2.0,
@@ -574,6 +574,23 @@ mod tests {
         assert!(cfg.threshold(6) > cfg.threshold(12));
         // Коротше за min_switch_len → нескінченність (ніколи).
         assert_eq!(cfg.threshold(0), f64::INFINITY);
+    }
+
+    #[test]
+    fn calibrated_short_word_threshold_holds_recall_margin() {
+        // Калібрування кейсу B: `short_word_extra=4.0` (а не 6.0) опускає
+        // thr(len=3) до ~2.33, щоб ловити правдоподібні не-слова (`rjk`→`кол`,
+        // char-LM перевага ~2.43) БЕЗ нових FP. Запас до найгіршого негатива
+        // (`vec`→uk, conf≈1.15 на реальному eval) має лишатись ≥ ~1.0. Цей тест
+        // ловить випадкову зміну, що з'їла б margin (поріг ≤ ~1.15 → FP).
+        let cfg = DetectorConfig::default();
+        assert_eq!(cfg.short_word_extra, 4.0, "калібрований запас кейсу B");
+        assert_eq!(cfg.base_threshold, 1.0);
+        assert!((cfg.threshold(3) - 7.0 / 3.0).abs() < 1e-9, "thr(3)≈2.33");
+        assert!(
+            cfg.threshold(3) > 1.15,
+            "поріг має лишатись вище найгіршого негатива (vec≈1.15)"
+        );
     }
 
     #[test]

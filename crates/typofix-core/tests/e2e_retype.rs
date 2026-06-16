@@ -99,17 +99,19 @@ fn typed_privit() -> [InputEvent; 7] {
 fn ghbdsn_in_en_becomes_privit() {
     let langs = [profile("uk"), profile("en")];
 
+    // Реальна ОС: пробіл-тригер УЖЕ надрукований перед курсором (хук пропускає
+    // натиск далі) → екран "ghbdsn ", курсор після пробілу.
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en")); // користувач застряг у en
-    platform.set_text("ghbdsn"); // те, що ОС уже надрукувала
+    platform.set_text("ghbdsn ");
     platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
 
     run(&mut platform, &langs);
 
     assert_eq!(
         platform.text(),
-        "привіт",
-        "крякозябри мали перетворитись на привіт"
+        "привіт ",
+        "крякозябри мали перетворитись на «привіт » (з пробілом, БЕЗ лишньої g)"
     );
     assert_eq!(
         platform.current_layout(),
@@ -124,18 +126,19 @@ fn applied_actions_are_delete_switch_type() {
 
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn "); // слово + надрукований пробіл на екрані
     platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
 
     run(&mut platform, &langs);
 
     use typofix_platform::Action;
+    // Стираємо слово РАЗОМ із пробілом (7), вписуємо виправлене слово + пробіл.
     assert_eq!(
         platform.applied_actions(),
         [
-            Action::DeleteChars(6),
+            Action::DeleteChars(7),
             Action::SwitchLayout(LayoutId::new("uk")),
-            Action::TypeUnicode("привіт".into()),
+            Action::TypeUnicode("привіт ".into()),
         ]
     );
 }
@@ -229,14 +232,14 @@ fn excluded_folder_bypasses_then_works_when_removed() {
     let mut platform = VirtualPlatform::new();
     platform.set_window(game_window.clone());
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
     platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
 
     run_with(&mut platform, &langs, &excl);
 
     assert_eq!(
         platform.text(),
-        "ghbdsn",
+        "ghbdsn ",
         "у виключеній теці чіпати не можна"
     );
     assert!(platform.applied_actions().is_empty());
@@ -245,14 +248,14 @@ fn excluded_folder_bypasses_then_works_when_removed() {
     let mut platform = VirtualPlatform::new();
     platform.set_window(game_window);
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
     platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
 
     run(&mut platform, &langs);
 
     assert_eq!(
         platform.text(),
-        "привіт",
+        "привіт ",
         "без виключення — звичайний перенабір"
     );
     assert_eq!(platform.current_layout(), LayoutId::new("uk"));
@@ -268,10 +271,10 @@ fn rejection_emits_commit_exception_and_learns_word() {
 
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
     platform.enqueue_all(typed_privit());
     drive_state(&mut platform, &mut state, &langs);
-    assert_eq!(platform.text(), "привіт", "перенабір мав статися");
+    assert_eq!(platform.text(), "привіт ", "перенабір мав статися");
 
     // Користувач негайно тисне Backspace → відкидання перенабору.
     platform.enqueue(key(BACKSPACE));
@@ -312,10 +315,10 @@ fn rejected_word_is_not_reswitched_on_second_appearance() {
     // 1) Перша поява → перенабір.
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
     platform.enqueue_all(typed_privit());
     drive_state(&mut platform, &mut state, &langs);
-    assert_eq!(platform.text(), "привіт");
+    assert_eq!(platform.text(), "привіт ");
 
     // 2) Негайне відкидання.
     platform.enqueue(key(BACKSPACE));
@@ -342,10 +345,10 @@ fn accepting_retype_does_not_learn() {
 
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
     platform.enqueue_all(typed_privit());
     drive_state(&mut platform, &mut state, &langs);
-    assert_eq!(platform.text(), "привіт");
+    assert_eq!(platform.text(), "привіт ");
 
     // Замість Backspace користувач просто продовжує набір (приймає перенабір).
     platform.enqueue(key(0x1E)); // будь-яка літера
@@ -368,7 +371,7 @@ fn mid_word_backspace_pops_then_retype_works() {
     let langs = [profile("uk"), profile("en")];
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn"); // екран після того, як користувач сам стер помилку
+    platform.set_text("ghbdsn "); // екран (слово + пробіл-тригер) у момент межі
 
     // g h b d s, помилкова 'k' (0x25), Backspace (поп 'k'), далі n, пробіл.
     platform.enqueue_all([
@@ -386,7 +389,7 @@ fn mid_word_backspace_pops_then_retype_works() {
 
     assert_eq!(
         platform.text(),
-        "привіт",
+        "привіт ",
         "поп помилкового страйка лишає слово когерентним → коректний перенабір"
     );
 }
@@ -396,7 +399,7 @@ fn multiple_backspaces_step_back_then_continue() {
     let langs = [profile("uk"), profile("en")];
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
 
     // Повне слово, потім 3×Backspace (лишається g h b), потім знову d s n, пробіл.
     platform.enqueue_all([
@@ -416,7 +419,11 @@ fn multiple_backspaces_step_back_then_continue() {
     ]);
     run(&mut platform, &langs);
 
-    assert_eq!(platform.text(), "привіт", "поетапне стирання + продовження");
+    assert_eq!(
+        platform.text(),
+        "привіт ",
+        "поетапне стирання + продовження"
+    );
 }
 
 #[test]
@@ -424,10 +431,10 @@ fn backspace_on_empty_buffer_does_not_pollute_next_word() {
     let langs = [profile("uk"), profile("en")];
     let mut platform = VirtualPlatform::new();
     platform.set_layout(LayoutId::new("en"));
-    platform.set_text("ghbdsn");
+    platform.set_text("ghbdsn ");
 
     // Backspace на порожньому буфері (стирання у попередній текст) → інвалідація;
-    // подальше чисте слово має перенабратись без домішок (рівно "привіт").
+    // подальше чисте слово має перенабратись без домішок (рівно "привіт ").
     platform.enqueue_all([
         key(BACKSPACE),
         key(G),
@@ -442,7 +449,103 @@ fn backspace_on_empty_buffer_does_not_pollute_next_word() {
 
     assert_eq!(
         platform.text(),
-        "привіт",
+        "привіт ",
         "порожній Backspace не псує наступне слово"
+    );
+}
+
+// --- Регрес: друкований роздільник на екрані (real-OS off-by-one) -----------
+
+const ENTER: u32 = 0x1C;
+
+/// Натиск із заданими модифікаторами (для великих літер через SHIFT).
+fn key_mod(scancode: u32, modifiers: Modifiers) -> InputEvent {
+    InputEvent::Key(KeyEvent {
+        scancode,
+        vk: 0,
+        dir: KeyDir::Down,
+        modifiers,
+        timestamp_ms: 0,
+        is_synthetic: false,
+        is_autorepeat: false,
+    })
+}
+
+#[test]
+fn space_separator_leaves_no_leftover_first_letter() {
+    // Точний баг із real-OS: пробіл уже на екрані («ghbdsn »); перенабір НЕ має
+    // лишати першу літеру спереду (раніше виходило «gпривіт»).
+    let langs = [profile("uk"), profile("en")];
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn ");
+    platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
+
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "привіт ",
+        "жодної лишньої «g» спереду; пробіл збережено"
+    );
+    assert!(
+        !platform.text().starts_with('g'),
+        "off-by-one: перша літера слова не має лишатись"
+    );
+}
+
+#[test]
+fn enter_separator_is_deleted_and_restored() {
+    // Та сама межа, але роздільник — Enter («\n»): стерти слово+`\n`, повернути `\n`.
+    let langs = [profile("uk"), profile("en")];
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn\n"); // слово + надрукований перевід рядка
+    platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(ENTER)]);
+
+    run(&mut platform, &langs);
+
+    use typofix_platform::Action;
+    assert_eq!(
+        platform.text(),
+        "привіт\n",
+        "Enter-роздільник стерто й повернено, без лишньої літери"
+    );
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            Action::DeleteChars(7),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("привіт\n".into()),
+        ]
+    );
+}
+
+#[test]
+fn capitalized_first_letter_is_preserved_with_separator() {
+    // Велика перша літера (Shift+G…): перевірка, що немає ще й бага капіталізації.
+    let langs = [profile("uk"), profile("en")];
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("Ghbdsn ");
+    platform.enqueue_all([
+        key_mod(G, Modifiers::SHIFT),
+        key(H),
+        key(B),
+        key(D),
+        key(S),
+        key(N),
+        key(SPACE),
+    ]);
+
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "Привіт ",
+        "велика перша літера збережена, пробіл повернено, без лишньої «G»"
     );
 }

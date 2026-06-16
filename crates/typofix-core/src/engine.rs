@@ -33,6 +33,21 @@ enum Class {
     Boundary,
 }
 
+/// Друкований символ роздільника межі слова, який на реальній ОС УЖЕ опинився на
+/// екрані перед курсором (хук пропустив натиск далі) у момент перенабору.
+///
+/// Структурні клавіші мають фіксований символ (пробіл/`\n`/`\t`); пунктуація/
+/// цифра — символ у поточній розкладці. Недруковані тригери межі (F-клавіші,
+/// Delete: `char_at` → `None`) повертають `None` — на екрані нічого не з'явилось.
+fn separator_char(stroke: KeyStroke, current_layout: Option<&Layout>) -> Option<char> {
+    match stroke.scancode {
+        SC_SPACE => Some(' '),
+        SC_ENTER => Some('\n'),
+        SC_TAB => Some('\t'),
+        _ => current_layout.and_then(|l| l.char_at(stroke.scancode, stroke.modifiers)),
+    }
+}
+
 /// Чи модифікатори означають **командну** комбінацію (Ctrl/Alt/Win — шорткат,
 /// не ввід тексту). AltGr — виняток: він *створює* символи третього рівня.
 fn is_command_combo(m: Modifiers) -> bool {
@@ -86,7 +101,15 @@ fn is_rejection(ev: &InputEvent, wkey: &str, pending: &PendingRetype) -> bool {
 
 /// Обробити подію межі слова: запустити детектор (із learned-veto) і, за
 /// рішенням, повернути план + зафіксувати очікування можливого відкидання.
-fn handle_boundary(state: &mut EngineState, wkey: &str, ctx: &Context) -> Vec<Action> {
+///
+/// `separator` — друкований символ роздільника, що тригернув межу (вже на екрані
+/// на реальній ОС); передається в [`replacer::plan`] для коректного стирання.
+fn handle_boundary(
+    state: &mut EngineState,
+    wkey: &str,
+    ctx: &Context,
+    separator: Option<char>,
+) -> Vec<Action> {
     if state.buffers.for_window(wkey).is_empty() {
         return Vec::new();
     }
@@ -99,7 +122,7 @@ fn handle_boundary(state: &mut EngineState, wkey: &str, ctx: &Context) -> Vec<Ac
         decision.switch = false;
     }
 
-    let actions = replacer::plan(&decision);
+    let actions = replacer::plan(&decision, separator);
     if decision.switch {
         // Відкриваємо коротке вікно очікування відкидання цього перенабору.
         state.pending_retype = Some(PendingRetype {
@@ -176,7 +199,10 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
     let current_layout = ctx.current_profile().map(|p| &p.layout);
 
     match classify(stroke, current_layout) {
-        Class::Boundary => handle_boundary(state, &wkey, ctx),
+        Class::Boundary => {
+            let separator = separator_char(stroke, current_layout);
+            handle_boundary(state, &wkey, ctx, separator)
+        }
         Class::Word => {
             state.buffers.for_window(&wkey).push(stroke);
             Vec::new()

@@ -9,6 +9,15 @@
 //! `replacer` не потребує окремої логіки регістру — він лише пакує результат у
 //! дії.
 //!
+//! ## Друкований роздільник на межі слова (real-OS готча)
+//! Перенабір майже завжди тригериться **друкованим** роздільником (пробіл/Enter/
+//! таб/пунктуація). На реальній ОС наш хук пропускає натиск далі, тож роздільник
+//! **уже на екрані** перед курсором у момент перенабору. Тому, якщо `separator`
+//! заданий, стираємо `word_len + 1` (слово РАЗОМ із роздільником) і вписуємо
+//! `corrected + separator` (повертаємо роздільник, щоб набір тривав далі).
+//! Інакше (непридатний для друку тригер — F-клавіша/Delete) роздільника на
+//! екрані немає → стара поведінка (`word_len`, без дописування).
+//!
 //! [`KeyStroke`]: crate::KeyStroke
 //! [`Layout::interpret`]: crate::Layout::interpret
 
@@ -17,21 +26,33 @@ use typofix_platform::Action;
 
 /// Зібрати план дій із рішення детектора.
 ///
-/// Якщо перемикати не треба — порожній план. Інакше: стерти `n` символів, що
-/// зараз на екрані (довжина поточної інтерпретації), перемкнути розкладку для
-/// подальшого набору й набрати виправлений текст.
-pub fn plan(decision: &Decision) -> Vec<Action> {
+/// Якщо перемикати не треба — порожній план. Інакше: стерти символи, що зараз на
+/// екрані (поточна інтерпретація — і друкований `separator`, якщо він є),
+/// перемкнути розкладку для подальшого набору й набрати виправлений текст
+/// (з тим самим роздільником у кінці).
+///
+/// `separator` — символ роздільника, який УЖЕ надрукований на екрані ОС (напр.
+/// `' '` для пробілу, `'\n'` для Enter). `None`, якщо тригер межі не друкований.
+pub fn plan(decision: &Decision, separator: Option<char>) -> Vec<Action> {
     if !decision.switch {
         return Vec::new();
     }
 
-    let delete_count = decision.current_text.chars().count() as u32;
+    let word_len = decision.current_text.chars().count() as u32;
+    // Друкований роздільник уже на екрані → стерти його разом зі словом.
+    let delete_count = word_len + u32::from(separator.is_some());
+
+    let mut typed = decision.best_text.clone();
+    if let Some(sep) = separator {
+        typed.push(sep); // повертаємо роздільник за виправленим словом
+    }
+
     let mut actions = Vec::with_capacity(3);
     if delete_count > 0 {
         actions.push(Action::DeleteChars(delete_count));
     }
     actions.push(Action::SwitchLayout(decision.best.clone()));
-    actions.push(Action::TypeUnicode(decision.best_text.clone()));
+    actions.push(Action::TypeUnicode(typed));
     actions
 }
 
@@ -52,12 +73,13 @@ mod tests {
 
     #[test]
     fn no_switch_yields_empty_plan() {
-        assert!(plan(&decision(false, "ghbdsn", "привіт", "uk")).is_empty());
+        assert!(plan(&decision(false, "ghbdsn", "привіт", "uk"), Some(' ')).is_empty());
     }
 
     #[test]
     fn switch_builds_delete_switch_type_in_order() {
-        let actions = plan(&decision(true, "ghbdsn", "привіт", "uk"));
+        // Без друкованого роздільника (напр. недрукований тригер межі).
+        let actions = plan(&decision(true, "ghbdsn", "привіт", "uk"), None);
         assert_eq!(
             actions,
             vec![
@@ -69,22 +91,46 @@ mod tests {
     }
 
     #[test]
+    fn printable_separator_deletes_word_plus_one_and_retypes_it() {
+        // Регрес off-by-one: пробіл уже на екрані → стерти слово+пробіл (7), а не
+        // лише слово (6); виправлене слово вписати РАЗОМ із пробілом.
+        let actions = plan(&decision(true, "ghbdsn", "привіт", "uk"), Some(' '));
+        assert_eq!(
+            actions,
+            vec![
+                Action::DeleteChars(7),
+                Action::SwitchLayout(LayoutId::new("uk")),
+                Action::TypeUnicode("привіт ".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn newline_separator_is_preserved() {
+        // Enter як межа: стерти слово+`\n`, вписати слово+`\n`.
+        let actions = plan(&decision(true, "ghbdsn", "привіт", "uk"), Some('\n'));
+        assert_eq!(actions[0], Action::DeleteChars(7));
+        assert_eq!(actions[2], Action::TypeUnicode("привіт\n".into()));
+    }
+
+    #[test]
     fn delete_count_is_in_chars_not_bytes() {
-        // "привіт" — 6 символів, але 12 байтів у UTF-8.
-        let actions = plan(&decision(true, "привіт", "ghbdsn", "en"));
-        assert_eq!(actions[0], Action::DeleteChars(6));
+        // "привіт" — 6 символів, але 12 байтів у UTF-8 (+1 за роздільник = 7).
+        let actions = plan(&decision(true, "привіт", "ghbdsn", "en"), Some(' '));
+        assert_eq!(actions[0], Action::DeleteChars(7));
     }
 
     #[test]
     fn preserves_case_from_best_text() {
-        // best_text уже з великої (бо страйк мав SHIFT) — replacer лише пакує.
-        let actions = plan(&decision(true, "Ghbdsn", "Привіт", "uk"));
-        assert_eq!(actions[2], Action::TypeUnicode("Привіт".into()));
+        // best_text уже з великої (бо страйк мав SHIFT) — replacer лише пакує;
+        // роздільник не псує регістр першої літери.
+        let actions = plan(&decision(true, "Ghbdsn", "Привіт", "uk"), Some(' '));
+        assert_eq!(actions[2], Action::TypeUnicode("Привіт ".into()));
     }
 
     #[test]
     fn preserves_apostrophe() {
-        let actions = plan(&decision(true, "g'znm", "п'ять", "uk"));
-        assert_eq!(actions[2], Action::TypeUnicode("п'ять".into()));
+        let actions = plan(&decision(true, "g'znm", "п'ять", "uk"), Some(' '));
+        assert_eq!(actions[2], Action::TypeUnicode("п'ять ".into()));
     }
 }

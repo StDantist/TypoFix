@@ -37,7 +37,8 @@ fn profiles() -> Vec<LanguageProfile> {
         привіт добре бюджет хліб жнива їжа любов \
         привіт як добре все привіт друже добре день бюджет на рік хліб свіжий";
     let en_corpus =
-        "hello world good morning please name return value list function the quick brown fox";
+        "hello world good morning please name return value list function the quick brown fox \
+        hood good food mood the hood is good a good hood good hood food hood";
 
     let uk = LanguageProfile {
         id: LayoutId::new("uk"),
@@ -62,7 +63,7 @@ fn profiles() -> Vec<LanguageProfile> {
         lm: NgramModel::train(en_corpus, 3, 0.5),
         dict: Dictionary::from_words([
             "hello", "world", "good", "morning", "please", "name", "return", "value", "list",
-            "function",
+            "function", "hood", "food", "mood",
         ])
         .unwrap(),
     };
@@ -93,6 +94,17 @@ fn strokes_for_uk_word(word: &str) -> Vec<KeyStroke> {
         .map(|ch| {
             uk.stroke_for(ch)
                 .unwrap_or_else(|| panic!("немає клавіші для '{ch}' у uk"))
+        })
+        .collect()
+}
+
+/// Те саме, але страйки англ. слова через зворотний індекс en-розкладки.
+fn strokes_for_en_word(word: &str) -> Vec<KeyStroke> {
+    let en = en_layout();
+    word.chars()
+        .map(|ch| {
+            en.stroke_for(ch)
+                .unwrap_or_else(|| panic!("немає клавіші для '{ch}' у en"))
         })
         .collect()
 }
@@ -137,6 +149,60 @@ fn type_in_en_expect(uk_word: &str, tail: &[u32]) -> (String, Vec<Action>) {
 
     run(&mut platform, &langs);
     (platform.text(), platform.applied_actions().to_vec())
+}
+
+/// ЗВОРОТНИЙ сценарій (кейс A): користувач застряг у `uk` і фізично набрав
+/// клавіші англ. слова `en_word` (+опційний хвіст), потім пробіл. На екрані —
+/// uk-інтерпретація (крякозябри). Має перемкнутись на `en_word`.
+fn type_in_uk_expect(en_word: &str, tail: &[u32]) -> (String, Vec<Action>) {
+    let langs = profiles();
+    let uk = uk_layout();
+
+    let mut strokes = strokes_for_en_word(en_word);
+    for &sc in tail {
+        strokes.push(KeyStroke::new(sc, Modifiers::empty()));
+    }
+
+    // Те, що ОС надрукувала б у uk (хвостова кома-клавіша 0x33 → «б») + пробіл.
+    let mut screen: String = uk.interpret(&strokes);
+    screen.push(' ');
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("uk"));
+    platform.set_text(&screen);
+    let mut evs: Vec<InputEvent> = strokes.into_iter().map(key).collect();
+    evs.push(key_sc(SPACE));
+    platform.enqueue_all(evs);
+
+    run(&mut platform, &langs);
+    (platform.text(), platform.applied_actions().to_vec())
+}
+
+// ─── Кейс A: асиметрія коми (поточна UK, кома-клавіша=«б», кандидат EN) ──────
+
+#[test]
+fn reverse_trailing_comma_uk_to_en_hood() {
+    // Поточна UK, набрано h o o d ,(0x33) пробіл → на екрані "рщщвб ". Кома-
+    // клавіша = «б» у поточній (UK), але «,» у кандидатній (EN). Гілка-роздільник
+    // має стрипнути хвіст → "hood" (словникове en) + кома-роздільник.
+    let (text, actions) = type_in_uk_expect("hood", &[0x33]); // +кома-клавіша
+    assert_eq!(
+        text, "hood, ",
+        "UK→EN: кома-клавіша як роздільник, слово «hood» перемкнуто"
+    );
+    assert!(
+        actions
+            .iter()
+            .any(|a| matches!(a, Action::SwitchLayout(id) if id.as_str() == "en")),
+        "мав бути перенабір на en"
+    );
+}
+
+#[test]
+fn reverse_english_word_plus_comma_in_uk() {
+    // Інше англ. слово + кома в UK-розкладці: «good» = g o o d ,
+    let (text, _) = type_in_uk_expect("good", &[0x33]);
+    assert_eq!(text, "good, ", "UK→EN: «good,» теж має перемкнутись");
 }
 
 // ─── TP: пунктуація-літера ВСЕРЕДИНІ слова має тепер працювати ──────────────

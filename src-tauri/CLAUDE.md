@@ -99,9 +99,25 @@ npm --prefix ui install
 - `detector_config_from`: `min_word_len`→`min_switch_len` (прямий). `confidence_threshold`
   (0..1) масштабує `base_threshold` монотонно навколо 0.75=дефолт — **тимчасова**
   евристика (внутрішній поріг — лог-ймовірнісний, не 0..1); справжня калібровка у фазі eval.
-- `load_language_profiles`: uk+en через `typofix-data` (`load_layout/load_lm/load_dict`).
-  `data_dir=None` → вбудовані зразки (наскрізна робота); реальні `.bin`/`.fst` —
-  через override-каталог, коли з'являться (TODO у `sync_runtime`).
+- `load_language_profiles(pair, data_dir)`: uk+en через `typofix-data`. `data_dir` —
+  **корінь** `data/`; функція сама додає піддиректорії: `load_layout`←`data/layouts`,
+  `load_lm`←`data/lm`, `load_dict`←`data/dicts` (типове `{lang}.{toml,bin,fst}`).
+  Відсутній файл → fallback на вбудований зразок.
+- **Реальні моделі через env `TYPOFIX_DATA_DIR`** (`resolved_data_dir()`): якщо вказує
+  на наявну теку — вантажимо справжні `.bin`/`.fst`; інакше зразки (слабші, ~46%).
+  `sync_runtime` передає це у рушій. У проді шлях даватиме інсталяція (ресурси) — TODO.
+
+## Демо-бінар `src/bin/live_engine.rs` (жива перевірка без GUI)
+Окремий бінар: реальні моделі (`TYPOFIX_DATA_DIR`) → `WindowsPlatform` (хуки) →
+цикл рушія ~20 c (Esc — раніше) → лог `[ВИПРАВЛЕНО] 'було' → 'стало' (мова X→Y)`.
+«Було» реконструюється back-translate (символи перенабору → страйки в цільовій
+розкладці → інтерпретація у вихідній). ⚠️ Ставить системні хуки — **лише вручну**.
+Запуск з кореня репо:
+```powershell
+$env:TYPOFIX_DATA_DIR = "d:\Projects\TypoFix\data"
+cargo run -p typofix-app --bin live_engine
+```
+Не-Windows: бінар компілюється як заглушка (друкує попередження).
 
 ## Самонавчання — файл навчених винятків
 - **Де:** `learned_exceptions.txt` у **тому ж** app config dir, що й `settings.json`

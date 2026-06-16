@@ -4,8 +4,9 @@
 //! конфіг (`config.rs`). Реальної логіки розпізнавання тут НЕМАЄ — місця
 //! під'єднання ядра/платформи позначено `TODO` (Фаза 5).
 
-mod config;
-mod runtime;
+// pub, щоб демо-бінар `src/bin/live_engine.rs` переюзав helper'и рантайму.
+pub mod config;
+pub mod runtime;
 
 use std::sync::Mutex;
 
@@ -111,9 +112,9 @@ fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
     };
     let manager = app.state::<Mutex<RuntimeManager>>();
     let mut guard = manager.lock().expect("RuntimeManager отруєно");
-    // data_dir = None → беруться вбудовані зразки моделей (наскрізна робота).
-    // TODO(models): підставити реальний каталог `.bin`/`.fst`, коли з'являться.
-    if let Err(err) = guard.apply(settings, learned_path, None) {
+    // Реальні моделі з TYPOFIX_DATA_DIR, якщо задано; інакше вбудовані зразки.
+    let data_dir = runtime::resolved_data_dir();
+    if let Err(err) = guard.apply(settings, learned_path, data_dir) {
         eprintln!("TypoFix: рушій не стартував: {err}");
     }
 }

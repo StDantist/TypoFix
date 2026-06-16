@@ -80,18 +80,25 @@ pub fn langs_for(pair: LanguagePair) -> [&'static str; 2] {
 
 /// Завантажити профілі мов (розкладка + LM + словник) для пари.
 ///
-/// Без `override_dir` беруться вбудовані зразки (наскрізна робота «з коробки»);
-/// реальні `.bin`/`.fst` підхопляться з `override_dir`, коли з'являться. Чисте
-/// IO без хука → тестовно.
+/// `data_dir` — **корінь** каталогу даних репозиторію (із піддиректоріями
+/// `layouts/`, `lm/`, `dicts/`). `typofix-data` шукає файли як
+/// `{piддир}/{lang}.{toml,bin,fst}`; відсутній файл/каталог → fallback на
+/// вбудований зразок (наскрізна робота «з коробки»). Чисте IO без хука → тестовно.
 pub fn load_language_profiles(
     pair: LanguagePair,
-    override_dir: Option<&Path>,
+    data_dir: Option<&Path>,
 ) -> Result<Vec<LanguageProfile>, String> {
+    // Кожен вид даних має власну піддиректорію — їх і передаємо як override.
+    let layout_dir = data_dir.map(|d| d.join("layouts"));
+    let lm_dir = data_dir.map(|d| d.join("lm"));
+    let dict_dir = data_dir.map(|d| d.join("dicts"));
+
     let mut profiles = Vec::new();
     for lang in langs_for(pair) {
-        let layout = typofix_data::load_layout(lang, override_dir).map_err(|e| e.to_string())?;
-        let lm = typofix_data::load_lm(lang, override_dir).map_err(|e| e.to_string())?;
-        let dict = typofix_data::load_dict(lang, override_dir).map_err(|e| e.to_string())?;
+        let layout =
+            typofix_data::load_layout(lang, layout_dir.as_deref()).map_err(|e| e.to_string())?;
+        let lm = typofix_data::load_lm(lang, lm_dir.as_deref()).map_err(|e| e.to_string())?;
+        let dict = typofix_data::load_dict(lang, dict_dir.as_deref()).map_err(|e| e.to_string())?;
         profiles.push(LanguageProfile {
             id: LayoutId::new(lang),
             layout,
@@ -100,6 +107,15 @@ pub fn load_language_profiles(
         });
     }
     Ok(profiles)
+}
+
+/// Каталог даних для override-моделей: змінна `TYPOFIX_DATA_DIR`, якщо вказує на
+/// наявну теку. Інакше `None` → вбудовані зразки. (Зручно для демо/розробки;
+/// у проді шлях даватиме інсталяція через ресурси.)
+pub fn resolved_data_dir() -> Option<PathBuf> {
+    let raw = std::env::var_os("TYPOFIX_DATA_DIR")?;
+    let dir = PathBuf::from(raw);
+    dir.is_dir().then_some(dir)
 }
 
 // ===========================================================================
@@ -388,6 +404,24 @@ mod tests {
         // Профілі реально завантажились (непорожні моделі/розкладки).
         assert!(!profiles[0].layout.is_empty());
         assert!(!profiles[0].lm.is_empty());
+    }
+
+    #[test]
+    fn real_models_load_via_data_dir_when_present() {
+        // Пропускаємо, якщо реальних моделей немає (CI/інша машина) — тест
+        // безпечний скрізь, але доказовий там, де є `data/`.
+        let Some(raw) = std::env::var_os("TYPOFIX_DATA_DIR") else {
+            return;
+        };
+        let dir = PathBuf::from(raw);
+        if !dir.is_dir() {
+            return;
+        }
+        let profiles = load_language_profiles(LanguagePair::UkEn, Some(&dir)).unwrap();
+        assert_eq!(profiles.len(), 2);
+        let uk = profiles.iter().find(|p| p.id.as_str() == "uk").unwrap();
+        // Справжня uk-LM має оцінювати валідне слово вище за крякозябри.
+        assert!(uk.lm.score("привіт") > uk.lm.score("ghbdsn"));
     }
 
     #[test]

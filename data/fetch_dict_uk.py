@@ -33,14 +33,35 @@ OUT = os.path.join(HERE, "dicts", "uk.full.txt")
 UK_LETTERS = set("абвгґдеєжзиіїйклмнопрстуфхцчшщьюя")
 APOS = {"'", "’"}
 
-# Беремо лише форми ДОВЖИНОЮ >= MIN_LEN. Чому: VESUM містить рідкісні короткі форми
-# (`мус`,`фал`,`ші`,`ше`,`ру`...), які (а) збігаються з код/сленг-токенами → FP, і
-# (б) роблять кирилічний двійник коротких en-слів "словниковим" → ламають дзеркальну
-# релаксацію детектора (core, Den) → FN на pos_uk_for_en. Короткі слова (<=3) і так
-# покриті корпусом + whitelist (`*.short.txt`, відкалібровано Den). Емпірично на eval:
-# повний VESUM → precision 98.8%/recall 91.1%; VESUM[len>=4] → precision 100%/recall
-# 95.5% (vs baseline 100%/95.0%). Втрата покриття мізерна (~3.4k форм із 3.82M).
-MIN_LEN = 4
+# Довгі форми (>= LONG_LEN) беремо всі. Короткі (<= 3) — ЛИШЕ з подвійним гейтом
+# `розмовна_частота >= SHORT_FREQ_MIN` (∩ VESUM автоматично, бо тягнемо з VESUM).
+# Чому: повний VESUM містить рідкісні короткі форми (`ші`,`ше`,`ру`...), які (а)
+# збігаються з код/сленг → FP, (б) роблять кирилічний двійник коротких en-слів
+# "словниковим" → ламають релаксацію детектора (core/Den) → FN. Частотний гейт
+# пускає лише ЧАСТІ розмовні короткі (`що`,`щоб`,`ну`,`ха`,`то`,`ще`), відсікаючи
+# шум. Частоти — OpenSubtitles (data/fetch_freq.py → corpora/freq/uk.freq.txt).
+# Емпірично: повний VESUM → P98.8/R91.1; len>=4 → P100/R95.5; +частотні короткі
+# повертають короткий recall БЕЗ шуму. SHORT_FREQ_MIN — калібрувальний поріг.
+LONG_LEN = 4
+SHORT_FREQ_MIN = 200
+FREQ_PATH = os.path.join(HERE, "corpora", "freq", "uk.freq.txt")
+
+
+def load_short_freq_gate():
+    """Множина коротких (<=3) укр. слів із частотою >= SHORT_FREQ_MIN."""
+    gate = set()
+    if not os.path.exists(FREQ_PATH):
+        print(f"  УВАГА: немає {FREQ_PATH} — короткі форми НЕ ввійдуть "
+              f"(спершу: python data/fetch_freq.py). Лише форми >= {LONG_LEN} літер.")
+        return gate
+    with open(FREQ_PATH, encoding="utf-8") as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) == 2 and parts[1].isdigit():
+                w = parts[0]
+                if len(w) <= 3 and int(parts[1]) >= SHORT_FREQ_MIN:
+                    gate.add(w)
+    return gate
 
 
 def is_clean_uk_form(tok):
@@ -58,7 +79,9 @@ def main():
             f"немає {SRC} — спершу завантаж і розпакуй dict_corp_vis.txt.bz2 "
             f"(див. docstring)"
         )
+    short_gate = load_short_freq_gate()
     forms = set()
+    short_kept = 0
     total = 0
     with open(SRC, encoding="utf-8") as f:
         for line in f:
@@ -68,13 +91,20 @@ def main():
                 continue
             tok = line.split(None, 1)[0]  # 1-ша колонка = поверхнева форма
             low = tok.lower().strip("'’")
-            if len(low) >= MIN_LEN and is_clean_uk_form(low):
+            if not is_clean_uk_form(low):
+                continue
+            if len(low) >= LONG_LEN:
+                forms.add(low)
+            elif low in short_gate:  # короткі — лише частотний гейт
+                if low not in forms:
+                    short_kept += 1
                 forms.add(low)
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         for w in sorted(forms):
             f.write(w + "\n")
-    print(f"рядків прочитано: {total}; унікальних чистих укр. форм: {len(forms)}")
+    print(f"рядків прочитано: {total}; унікальних чистих укр. форм: {len(forms)}"
+          f" (з них коротких <=3 за частотним гейтом: {short_kept})")
     print(f"-> {OUT} ({os.path.getsize(OUT) / 1e6:.1f} МБ тексту)")
 
 

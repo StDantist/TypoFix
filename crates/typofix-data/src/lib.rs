@@ -27,8 +27,10 @@
 
 pub mod eval;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use fst::Map as FstMap;
 use serde::Deserialize;
 use thiserror::Error;
 use typofix_core::{Dictionary, KeyCap, Layout, LayoutId, NgramModel};
@@ -332,6 +334,62 @@ pub fn load_short_words(lang: &str, dir: &Path) -> std::io::Result<Vec<String>> 
     Ok(parse_short_words(&std::fs::read_to_string(path)?))
 }
 
+// --- Частотний словник (fst::Map: слово → count) ---------------------------
+//
+// `{lang}.freq.fst` — `fst::Map`, що відображає слово (lowercase) у його розмовну
+// частоту (count з OpenSubtitles, готує `data/fetch_freq.py`). На відміну від
+// `Dictionary` (бінарне членство), даває core ГРАДУЙОВАНИЙ сигнал: часте слово
+// (`the`,`you`) → НЕ чіпати; рідкісне/відсутнє (`ye`,`lox`) → можна перемкнути.
+//
+// ІНТЕРФЕЙС ДЛЯ CORE (узгоджено з Den): `freq(word) -> Option<u64>`. Відсутність
+// запису (None) ≠ «не слово»: валідні рідкісні флексії довгого хвоста VESUM не
+// мають freq-запису, але Є членами `Dictionary` → score() дає їм BASELINE-бонус,
+// а freq лише ДОДАЄ зважування зверху. Власник score() — core (Den); тип-обгортку
+// для `LanguageProfile` він визначає в core (як `Dictionary`), беручи сирі байти
+// з `build_freq_map`/читаючи через `load_freq_map_file`.
+
+/// Побудувати байти `fst::Map` (слово → count) зі списку пар. Дублі по слову
+/// зливаються максимумом; вхід сортується/дедуплікується (вимога FST).
+pub fn build_freq_map<I, S>(entries: I) -> Result<Vec<u8>, ModelError>
+where
+    I: IntoIterator<Item = (S, u64)>,
+    S: AsRef<str>,
+{
+    let mut sorted: BTreeMap<String, u64> = BTreeMap::new();
+    for (w, c) in entries {
+        let key = w.as_ref().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        let e = sorted.entry(key).or_insert(0);
+        *e = (*e).max(c);
+    }
+    let map = FstMap::from_iter(sorted)?;
+    Ok(map.as_fst().as_bytes().to_vec())
+}
+
+/// Записати частотний словник у файл `.freq.fst`.
+pub fn save_freq_map(bytes: &[u8], path: &Path) -> Result<(), ModelError> {
+    std::fs::write(path, bytes).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+/// Завантажити частотний словник із файлу `.freq.fst`.
+pub fn load_freq_map_file(path: &Path) -> Result<FstMap<Vec<u8>>, ModelError> {
+    let bytes = std::fs::read(path).map_err(|source| ModelError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(FstMap::new(bytes)?)
+}
+
+/// Частота слова у словнику (регістронезалежно), або `None`, якщо запису немає.
+pub fn freq_lookup(map: &FstMap<Vec<u8>>, word: &str) -> Option<u64> {
+    map.get(word.to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +495,18 @@ mod tests {
         let en = sample_dict("en").unwrap();
         assert!(en.contains("hello"));
         assert!(!en.contains("привіт"));
+    }
+
+    #[test]
+    fn freq_map_builds_and_looks_up() {
+        let bytes = build_freq_map([("the", 1000u64), ("ye", 5u64), ("THE", 200u64)]).unwrap();
+        let map = FstMap::new(bytes).unwrap();
+        // Регістронезалежно + дублі злиті максимумом.
+        assert_eq!(freq_lookup(&map, "the"), Some(1000));
+        assert_eq!(freq_lookup(&map, "The"), Some(1000));
+        assert_eq!(freq_lookup(&map, "ye"), Some(5));
+        // Відсутнє слово → None (≠ нульова частота).
+        assert_eq!(freq_lookup(&map, "lox"), None);
     }
 
     #[test]

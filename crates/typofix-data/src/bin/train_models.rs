@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use typofix_core::lm::{DEFAULT_K, DEFAULT_ORDER};
-use typofix_data::{build_dict, save_dict, save_lm, train_lm};
+use typofix_data::{build_dict, build_freq_map, save_dict, save_freq_map, save_lm, train_lm};
 
 fn data_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -93,6 +93,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         let dict = build_dict(words.iter().map(String::as_str))?;
         let dict_path = dict_dir.join(format!("{lang}.fst"));
         save_dict(&dict, &dict_path)?;
+
+        // --- Частотний словник (fst::Map слово→count) ---
+        // Джерело: data/corpora/freq/{lang}.freq.txt (`слово<TAB>count`), готує
+        // data/fetch_freq.py (OpenSubtitles). Дає core градуйований частотний сигнал.
+        let freq_src = corpora.join("freq").join(format!("{lang}.freq.txt"));
+        if let Ok(freq_raw) = std::fs::read_to_string(&freq_src) {
+            let entries: Vec<(String, u64)> = freq_raw
+                .lines()
+                .filter_map(|line| {
+                    let (w, c) = line.split_once('\t')?;
+                    Some((w.to_owned(), c.trim().parse::<u64>().ok()?))
+                })
+                .collect();
+            let bytes = build_freq_map(entries.iter().map(|(w, c)| (w.as_str(), *c)))?;
+            let freq_path = dict_dir.join(format!("{lang}.freq.fst"));
+            save_freq_map(&bytes, &freq_path)?;
+            println!(
+                "[{lang}] частотний словник: {} слів -> {} ({:.2} МБ)",
+                entries.len(),
+                freq_path.display(),
+                bytes.len() as f64 / 1e6,
+            );
+        } else {
+            eprintln!(
+                "[{lang}] freq SKIP — немає {}. Спершу: python data/fetch_freq.py",
+                freq_src.display()
+            );
+        }
 
         let lm_mb = std::fs::metadata(&lm_path)?.len() as f64 / 1e6;
         let fst_mb = std::fs::metadata(&dict_path)?.len() as f64 / 1e6;

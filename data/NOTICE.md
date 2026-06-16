@@ -33,6 +33,17 @@
   явно дозволив** використання NC/GPL-даних: TypoFix — суто особистий,
   некомерційний, відкритий код. Тому несумісність із MIT/Apache тут не діє.
 
+## Частотні словники — OpenSubtitles (hermitdave/FrequencyWords)
+
+- **Джерело:** `hermitdave/FrequencyWords`, набір OpenSubtitles 2018
+  (<https://github.com/hermitdave/FrequencyWords>), `{uk,en}_full.txt` (`слово count`).
+- **Ліцензія:** **MIT** (поверх корпусу OpenSubtitles). Регенерація: `data/fetch_freq.py`.
+- **Навіщо розмовний регістр:** Вікіпедія (Leipzig) — формальна, де `ну/ха/що`
+  мають count≈1 (нерозрізнювані від шуму); субтитри дають реальну розмовну частоту.
+- **Артефакти:** `data/dicts/{uk,en}.freq.fst` (`fst::Map` слово→count, gitignored);
+  uk 56.9k слів / 0.50 МБ, en 293.8k / 2.07 МБ. EN очищено від фрагментів
+  контракцій (`s/d/t/m/ll/re/ve`).
+
 ## Whitelist коротких слів — `dicts/{uk,en}.short.txt`
 
 Авторська компіляція коротких службових слів (1-2 літери). Це **факти мови**

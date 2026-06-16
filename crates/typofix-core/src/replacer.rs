@@ -55,7 +55,12 @@ pub fn plan(decision: &Decision, separator: Option<char>) -> Vec<Action> {
     if delete_count > 0 {
         actions.push(Action::DeleteChars(delete_count));
     }
-    actions.push(Action::SwitchLayout(decision.best.clone()));
+    // Чиста корекція регістру (перетриманий Shift) НЕ міняє розкладку — слово вже
+    // в правильній мові, треба лише перенабрати з виправленим регістром. Для
+    // розкладко-перемикання `SwitchLayout` обов'язковий (подальший набір).
+    if !decision.caps_only {
+        actions.push(Action::SwitchLayout(decision.best.clone()));
+    }
     actions.push(Action::TypeUnicode(typed));
     actions
 }
@@ -73,6 +78,7 @@ mod tests {
             switch,
             confidence: 0.0,
             suffix: String::new(),
+            caps_only: false,
         }
     }
 
@@ -150,6 +156,23 @@ mod tests {
     fn preserves_apostrophe() {
         let actions = plan(&decision(true, "g'znm", "п'ять", "uk"), Some(' '));
         assert_eq!(actions[2], Action::TypeUnicode("п'ять ".into()));
+    }
+
+    #[test]
+    fn caps_only_correction_omits_switch_layout() {
+        // Перетриманий Shift: `ПРивіт`→`Привіт`, та сама розкладка → БЕЗ
+        // SwitchLayout. Стираємо слово+роздільник і вписуємо виправлений регістр.
+        let mut d = decision(true, "ПРивіт", "Привіт", "uk");
+        d.caps_only = true;
+        let actions = plan(&d, Some(' '));
+        assert_eq!(
+            actions,
+            vec![
+                Action::DeleteChars(7),
+                Action::TypeUnicode("Привіт ".into()),
+            ],
+            "caps-корекція не має емітити SwitchLayout"
+        );
     }
 
     #[test]

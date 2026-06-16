@@ -149,6 +149,12 @@ pub struct Decision {
     /// дописує його після `best_text` і враховує в кількості стирання (та сама
     /// к-сть символів, що й на екрані: один страйк → один символ у будь-якій мові).
     pub suffix: String,
+    /// **Корекція ЛИШЕ регістру** (помилка перетриманого Shift), БЕЗ зміни
+    /// розкладки. Коли `true`, `best == current_layout`, а `best_text` —
+    /// нормалізований регістр того ж слова в тій самій мові; `replacer` НЕ
+    /// емітить `SwitchLayout` (перенабір лише стирає й вписує виправлений текст).
+    /// `false` для звичайного розкладко-перемикання. Див. [`overheld_shift_fix`].
+    pub caps_only: bool,
 }
 
 /// Чи символ — частина слова (літера або апостроф). Спільний критерій для межі
@@ -309,6 +315,77 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     }
 }
 
+/// Розпізнати помилку **перетриманого Shift** і повернути нормалізований регістр.
+///
+/// Патерн: слово має **префікс із 2+ великих літер**, після якого йде хоч одна
+/// мала (`ПРивіт`, `ПРИвіт`, `HEllo`). Нормалізація — лишити ВЕЛИКОЮ лише першу
+/// літеру, решту префікса зробити малими → `Привіт`/`Hello`.
+///
+/// **Precision-замок (ключовий розрізнювач — словник):** повертаємо `Some` ЛИШЕ
+/// якщо нормалізований варіант — РЕАЛЬНЕ слово у словнику поточної мови. Інакше
+/// `None` (не чіпаємо). Саме так помилка регістру відрізняється від навмисної
+/// абревіатури: `ПРивіт`→`Привіт` (реальне слово ✅), а `EAs`→`Eas` (не слово →
+/// НЕ чіпаємо, бо це `EA`+`s`).
+///
+/// **Не-патерни (повертають `None`):** слово ПОВНІСТЮ велике (`ПРИВІТ`, `EA`,
+/// `USD` — немає малих → навмисний капс/акронім), одна велика + малі (`Привіт`
+/// — уже коректно), повністю мале (`привіт`).
+fn overheld_shift_fix(word: &str, current: &LanguageProfile) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    // Лідируючий run великих літер.
+    let upper_prefix = chars.iter().take_while(|c| c.is_uppercase()).count();
+    if upper_prefix < 2 {
+        // 0 великих (`привіт`) або 1 (`Привіт` — уже коректно) → не патерн.
+        return None;
+    }
+    // Має бути хоч одна мала літера: інакше це ALL-CAPS (`ПРИВІТ`/`USD`) →
+    // навмисний капс/акронім, не чіпаємо.
+    if !chars.iter().any(|c| c.is_lowercase()) {
+        return None;
+    }
+    // Нормалізація: перша літера лишається як є (велика), решту — у нижній регістр
+    // (хвіст уже малий, тож це міняє лише «зайві» великі префікса).
+    let mut normalized = String::with_capacity(word.len());
+    for (i, c) in chars.iter().enumerate() {
+        if i == 0 {
+            normalized.push(*c);
+        } else {
+            normalized.extend(c.to_lowercase());
+        }
+    }
+    // Precision-замок: лише якщо нормалізований варіант — реальне слово.
+    if normalized != *word && current.dict.contains(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+/// Накласти корекцію регістру (перетриманий Shift) на рішення, що НЕ перемикає
+/// розкладку. Якщо детектор уже вирішив перемкнути мову — це основний кейс, його
+/// лишаємо (комбінований layout+caps кейс — свідомий follow-up, без подвійних
+/// суперечливих дій). Інакше: слово вже в правильній мові, і якщо його регістр
+/// має патерн перетриманого Shift, перетворюємо рішення на чисту caps-корекцію.
+fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
+    if d.switch {
+        return d; // розкладко-перемикання — основний кейс, caps не нашаровуємо
+    }
+    let Some(current) = ctx.current_profile() else {
+        return d;
+    };
+    if let Some(fixed) = overheld_shift_fix(&d.current_text, current) {
+        // Veto захищає precision і тут (слово, яке користувач уже відкидав).
+        if ctx.rules.vetoes(&d.current_text, &fixed) {
+            return d;
+        }
+        d.best = ctx.current_layout.clone();
+        d.best_text = fixed;
+        d.switch = true;
+        d.caps_only = true;
+    }
+    d
+}
+
 /// Розглянути буферизоване слово й вирішити, чи перемикати.
 ///
 /// `strokes` — фізичні натискання слова (layout-незалежні). Якщо поточної
@@ -334,14 +411,18 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
 
     // Немає хвостової пунктуації-літери → одна гілка (стара поведінка, без суфікса).
     if k == 0 {
-        return Decision {
-            best: letter.best,
-            best_text: letter.best_text,
-            current_text: letter.current_text,
-            switch: letter.switch,
-            confidence: letter.confidence,
-            suffix: String::new(),
-        };
+        return apply_caps_fix(
+            Decision {
+                best: letter.best,
+                best_text: letter.best_text,
+                current_text: letter.current_text,
+                switch: letter.switch,
+                confidence: letter.confidence,
+                suffix: String::new(),
+                caps_only: false,
+            },
+            ctx,
+        );
     }
 
     let split = strokes.len() - k;
@@ -364,7 +445,7 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     // слова й вищої впевненості; інакше лишаємо її роздільником (безпечно).
     let use_letter = letter.switch && letter.best_is_dict && letter.confidence > sep.confidence;
 
-    if use_letter {
+    let decision = if use_letter {
         Decision {
             best: letter.best,
             best_text: letter.best_text,
@@ -372,6 +453,7 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
             switch: letter.switch,
             confidence: letter.confidence,
             suffix: String::new(),
+            caps_only: false,
         }
     } else {
         Decision {
@@ -381,8 +463,10 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
             switch: sep.switch,
             confidence: sep.confidence,
             suffix,
+            caps_only: false,
         }
-    }
+    };
+    apply_caps_fix(decision, ctx)
 }
 
 #[cfg(test)]
@@ -452,6 +536,22 @@ mod tests {
         scancodes
             .iter()
             .map(|&sc| KeyStroke::new(sc, Modifiers::empty()))
+            .collect()
+    }
+
+    /// Страйки з керованим SHIFT на кожному (для тестів регістру): `(scancode,
+    /// shift?)`. SHIFT → велика літера в розкладці (`char_at` застосовує його).
+    fn strokes_shift(items: &[(u32, bool)]) -> Vec<KeyStroke> {
+        items
+            .iter()
+            .map(|&(sc, shift)| {
+                let m = if shift {
+                    Modifiers::SHIFT
+                } else {
+                    Modifiers::empty()
+                };
+                KeyStroke::new(sc, m)
+            })
             .collect()
     }
 
@@ -828,5 +928,213 @@ mod tests {
         // Без whitelist — лишається заблокованим (контроль).
         let plain = ctx_with(&langs, "en");
         assert!(!decide(&strokes(&[0x24]), &plain).switch);
+    }
+
+    // --- Корекція регістру (помилка перетриманого Shift) ---------------------
+    // Фізичні позиції (set 1): H=0x23 E=0x12 L=0x26 O=0x18 A=0x1E S=0x1F.
+
+    /// En-профіль для тестів регістру: має літери для `hello`/`eas`-кейсів.
+    fn caps_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x23, KeyCap::letter('h', 'H')),
+                (0x12, KeyCap::letter('e', 'E')),
+                (0x26, KeyCap::letter('l', 'L')),
+                (0x18, KeyCap::letter('o', 'O')),
+                (0x1E, KeyCap::letter('a', 'A')),
+                (0x1F, KeyCap::letter('s', 'S')),
+            ],
+        );
+        let lm = NgramModel::train("hello world good", 3, 0.5);
+        // `eas` НАВМИСНО відсутнє → `EAs`→`Eas` не пройде precision-замок.
+        let dict = Dictionary::from_words(["hello"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+        }
+    }
+
+    #[test]
+    fn caps_fix_uk_two_uppercase_prefix() {
+        // `ПРивіт`→`Привіт`: 2 великі на початку, решта малі, реальне укр. слово.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        // п р и в і т (0x22 0x23 0x30 0x20 0x1F 0x31), SHIFT на перших двох.
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, false),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "ПРивіт");
+        assert!(d.switch, "має виправити регістр");
+        assert!(d.caps_only, "це чиста caps-корекція, без зміни розкладки");
+        assert_eq!(d.best, LayoutId::new("uk"), "та сама розкладка");
+        assert_eq!(d.best_text, "Привіт");
+    }
+
+    #[test]
+    fn caps_fix_uk_three_uppercase_prefix() {
+        // `ПРИвіт`→`Привіт`: 3 великі на початку.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, true),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "ПРИвіт");
+        assert!(d.switch && d.caps_only);
+        assert_eq!(d.best_text, "Привіт");
+    }
+
+    #[test]
+    fn caps_fix_en_hello() {
+        // `HEllo`→`Hello`: працює і для латиниці.
+        let langs = [caps_en_profile()];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(
+            &strokes_shift(&[
+                (0x23, true),
+                (0x12, true),
+                (0x26, false),
+                (0x26, false),
+                (0x18, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "HEllo");
+        assert!(d.switch && d.caps_only);
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "Hello");
+    }
+
+    #[test]
+    fn caps_no_fix_all_caps() {
+        // `ПРИВІТ` — повністю велике (навмисний капс) → не чіпати.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, true),
+                (0x20, true),
+                (0x1F, true),
+                (0x31, true),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "ПРИВІТ");
+        assert!(!d.switch, "ALL-CAPS не чіпати (conf={})", d.confidence);
+    }
+
+    #[test]
+    fn caps_no_fix_non_word_abbrev() {
+        // `EAs`→норм. `Eas` — НЕ слово (це абревіатура `EA`+`s`) → не чіпати.
+        let langs = [caps_en_profile()];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(
+            &strokes_shift(&[(0x12, true), (0x1E, true), (0x1F, false)]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "EAs");
+        assert!(
+            !d.switch,
+            "норм. варіант не у словнику → не виправляти (precision-замок)"
+        );
+    }
+
+    #[test]
+    fn caps_no_fix_already_correct() {
+        // `Привіт` — одна велика + малі → вже коректно, не чіпати.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, false),
+                (0x30, false),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "Привіт");
+        assert!(!d.switch, "вже коректний регістр не чіпати");
+    }
+
+    #[test]
+    fn caps_no_fix_plain_lowercase() {
+        // `привіт` — повністю мале → не патерн перетриманого Shift.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        let d = decide(&strokes(&[0x22, 0x23, 0x30, 0x20, 0x1F, 0x31]), &ctx);
+        assert_eq!(d.current_text, "привіт");
+        assert!(!d.switch, "коректне мале слово не чіпати");
+    }
+
+    #[test]
+    fn caps_veto_blocks_correction() {
+        // Veto захищає precision і для caps-корекції.
+        let langs = [en_profile(), uk_profile()];
+        let mut rules = WordRules::new();
+        rules.veto_word("привіт"); // забороняє і виправлення регістру
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, false),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "ПРивіт");
+        assert!(!d.switch, "veto має заблокувати й caps-корекцію");
+    }
+
+    #[test]
+    fn combined_layout_and_caps_does_layout_switch_only() {
+        // Комбінований кейс (слово і в неправильній розкладці, і з перетриманим
+        // Shift): основний кейс — розкладка. Caps-корекція НЕ нашаровується
+        // (свідомий follow-up: без подвійних суперечливих дій). Перенабір дає
+        // слово в правильній МОВІ, але з тим самим регістром (`ПРивіт`).
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "en");
+        // У EN з SHIFT на перших двох: "GHbdsn"; у UK: "ПРивіт".
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, false),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "GHbdsn");
+        assert!(d.switch, "перемикання розкладки — основний кейс");
+        assert!(!d.caps_only, "це layout-перемикання, не caps-корекція");
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert_eq!(d.best_text, "ПРивіт", "регістр зберігається (follow-up)");
     }
 }

@@ -1,0 +1,202 @@
+# ISO 4217 — активні коди валют (alphabetic codes), один код на рядок, UPPERCASE.
+# Джерело: стандарт ISO 4217 (переліки кодів — факти/стандарт, не об'єкт копірайту).
+# Призначення: дані для core (Den). Veto-правило (у core, НЕ тут): токен
+#   ^[A-Z]{6}$, де [0:3] ∈ ISO ∩ [3:6] ∈ ISO  →  валютна пара (EURUSD, GBPUSD,
+#   XAUUSD…) → НЕ перемикати розкладку. Системно: список кодів + патерн, не хардкод пар.
+# Формат: один код на рядок, UPPERCASE, `#` — коментар, порожні рядки ігноруються.
+# Loader: typofix_data::load_iso4217(&Path) -> HashSet<String> (parse_iso4217 для рядка).
+#
+# СВІДОМО ВИКЛЮЧЕНО (зменшує хибні veto на 6-літерних UPPERCASE-токенах):
+#   - тестові/службові: XXX (no currency), XTS (testing);
+#   - bond market units: XBA XBB XBC XBD; supranational accounting: XUA XSU;
+#   - fund-коди (не торгуються як готівка): BOV CHE CHW CLF COU MXV USN UYI UYW.
+# Дорогоцінні метали (XAU/XAG/XPT/XPD) ЗАЛИШЕНО — це реальні Forex-інструменти
+# (XAUUSD = золото/долар тощо).
+
+# --- A ---
+AED
+AFN
+ALL
+AMD
+ANG
+AOA
+ARS
+AUD
+AWG
+AZN
+# --- B ---
+BAM
+BBD
+BDT
+BGN
+BHD
+BIF
+BMD
+BND
+BOB
+BRL
+BSD
+BTN
+BWP
+BYN
+BZD
+# --- C ---
+CAD
+CDF
+CHF
+CLP
+CNY
+COP
+CRC
+CUP
+CVE
+CZK
+# --- D ---
+DJF
+DKK
+DOP
+DZD
+# --- E ---
+EGP
+ERN
+ETB
+EUR
+# --- F ---
+FJD
+FKP
+# --- G ---
+GBP
+GEL
+GHS
+GIP
+GMD
+GNF
+GTQ
+GYD
+# --- H ---
+HKD
+HNL
+HTG
+HUF
+# --- I ---
+IDR
+ILS
+INR
+IQD
+IRR
+ISK
+# --- J ---
+JMD
+JOD
+JPY
+# --- K ---
+KES
+KGS
+KHR
+KMF
+KPW
+KRW
+KWD
+KYD
+KZT
+# --- L ---
+LAK
+LBP
+LKR
+LRD
+LSL
+LYD
+# --- M ---
+MAD
+MDL
+MGA
+MKD
+MMK
+MNT
+MOP
+MRU
+MUR
+MVR
+MWK
+MXN
+MYR
+MZN
+# --- N ---
+NAD
+NGN
+NIO
+NOK
+NPR
+NZD
+# --- O ---
+OMR
+# --- P ---
+PAB
+PEN
+PGK
+PHP
+PKR
+PLN
+PYG
+# --- Q ---
+QAR
+# --- R ---
+RON
+RSD
+RUB
+RWF
+# --- S ---
+SAR
+SBD
+SCR
+SDG
+SEK
+SGD
+SHP
+SLE
+SOS
+SRD
+SSP
+STN
+SVC
+SYP
+SZL
+# --- T ---
+THB
+TJS
+TMT
+TND
+TOP
+TRY
+TTD
+TWD
+TZS
+# --- U ---
+UAH
+UGX
+USD
+UYU
+UZS
+# --- V ---
+VED
+VES
+VND
+VUV
+# --- W ---
+WST
+# --- X (supranational circulating + precious metals + IMF SDR) ---
+XAF
+XAG
+XAU
+XCD
+XDR
+XOF
+XPD
+XPF
+XPT
+# --- Y ---
+YER
+# --- Z ---
+ZAR
+ZMW
+ZWG

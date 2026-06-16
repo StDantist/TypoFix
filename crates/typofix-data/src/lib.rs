@@ -27,7 +27,7 @@
 
 pub mod eval;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use fst::Map as FstMap;
@@ -390,6 +390,83 @@ pub fn freq_lookup(map: &FstMap<Vec<u8>>, word: &str) -> Option<u64> {
     map.get(word.to_lowercase())
 }
 
+// --- ISO 4217 коди валют (veto валютних пар) -------------------------------
+//
+// `data/dicts/iso4217.txt` — активні alphabetic-коди валют (один на рядок,
+// UPPERCASE, `#` — коментар). Дані для core (Den): veto-правило живе в core, не
+// тут. Патерн (у core): токен `^[A-Z]{6}$`, де `[0:3] ∈ ISO ∩ [3:6] ∈ ISO` —
+// валютна пара (EURUSD, XAUUSD…) → не перемикати розкладку. Системно: множина
+// кодів + патерн, не хардкод пар.
+//
+// ІНТЕРФЕЙС ДЛЯ CORE: `load_iso4217(&Path) -> HashSet<String>` (UPPERCASE-коди).
+// Конструювати вето — у core: він тримає `HashSet`, перевіряє половинки токена.
+// `is_currency_pair` — суто-даний (членство в множині) хелпер; КОЛИ його кликати
+// (тобто власне veto в `step`) вирішує core.
+
+/// Вбудований перелік ISO 4217 (committed, малий — кілька КБ).
+const ISO4217_TXT: &str = include_str!("../../../data/dicts/iso4217.txt");
+
+/// Розпарсити перелік ISO 4217 у множину кодів. Один рядок = один код,
+/// `#` — коментар, порожні рядки ігноруються; коди нормалізуються в UPPERCASE.
+pub fn parse_iso4217(src: &str) -> HashSet<String> {
+    src.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_uppercase())
+        .collect()
+}
+
+/// Множина кодів із вбудованого переліку (детерміновано, без IO).
+pub fn embedded_iso4217() -> HashSet<String> {
+    parse_iso4217(ISO4217_TXT)
+}
+
+/// Завантажити перелік ISO 4217 із файлу на диску.
+/// Файлу немає → вбудований перелік (щоб core завжди мав робочу множину).
+pub fn load_iso4217(path: &Path) -> std::io::Result<HashSet<String>> {
+    if !path.exists() {
+        return Ok(embedded_iso4217());
+    }
+    Ok(parse_iso4217(&std::fs::read_to_string(path)?))
+}
+
+/// Чи є `token` валютною парою щодо множини кодів `iso`: рівно 6 ASCII-літер,
+/// перша й друга половини (по 3) — обидві коди ISO. Регістронезалежно.
+/// Суто перевірка членства в множині (дані); власне veto-рішення — у core.
+pub fn is_currency_pair(iso: &HashSet<String>, token: &str) -> bool {
+    if token.len() != 6 || !token.bytes().all(|b| b.is_ascii_alphabetic()) {
+        return false;
+    }
+    let up = token.to_uppercase();
+    iso.contains(&up[0..3]) && iso.contains(&up[3..6])
+}
+
+// --- Особистий словник користувача (veto «ніколи не чіпати») ---------------
+//
+// `data/dicts/user.txt` — персональний whitelist (жаргон, нікнейми, бренди),
+// один термін на рядок, `#` — коментар. Loader читає у рантаймі; core тримає як
+// veto-набір (збіг → не перемикати). Регістронезалежність — на боці core
+// (матчинг), тут повертаємо терміни як є (trim), без зміни регістру.
+
+/// Розпарсити особистий словник: один рядок = один термін, `#` — коментар,
+/// порожні рядки ігноруються, краї обрізаються.
+pub fn parse_user_words(src: &str) -> Vec<String> {
+    src.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_string())
+        .collect()
+}
+
+/// Завантажити особистий словник користувача з файлу.
+/// Файлу немає → порожній список (veto-набір просто порожній).
+pub fn load_user_words(path: &Path) -> std::io::Result<Vec<String>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    Ok(parse_user_words(&std::fs::read_to_string(path)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +584,61 @@ mod tests {
         assert_eq!(freq_lookup(&map, "ye"), Some(5));
         // Відсутнє слово → None (≠ нульова частота).
         assert_eq!(freq_lookup(&map, "lox"), None);
+    }
+
+    // --- ISO 4217 + user.txt -----------------------------------------------
+
+    #[test]
+    fn iso4217_parses_majors_and_metals() {
+        let iso = embedded_iso4217();
+        for c in ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"] {
+            assert!(iso.contains(c), "очікувано {c} у ISO-множині");
+        }
+        // Дорогоцінні метали — реальні Forex-інструменти, лишені у переліку.
+        assert!(iso.contains("XAU") && iso.contains("XAG"));
+        // Тестові/службові свідомо виключені (зменшують хибні veto).
+        assert!(!iso.contains("XXX") && !iso.contains("XTS"));
+        // Розумний обсяг активного набору.
+        assert!(iso.len() > 140, "надто мало кодів: {}", iso.len());
+    }
+
+    #[test]
+    fn iso4217_ignores_comments_and_normalizes_case() {
+        let set = parse_iso4217("# коментар\n eur \nUSD\n\n# ще\ngbp");
+        assert_eq!(set.len(), 3);
+        assert!(set.contains("EUR") && set.contains("USD") && set.contains("GBP"));
+    }
+
+    #[test]
+    fn currency_pair_detection() {
+        let iso = embedded_iso4217();
+        assert!(is_currency_pair(&iso, "EURUSD"));
+        assert!(is_currency_pair(&iso, "GBPUSD"));
+        assert!(is_currency_pair(&iso, "XAUUSD")); // золото/долар
+        assert!(is_currency_pair(&iso, "eurusd")); // регістронезалежно
+                                                   // Не пара:
+        assert!(!is_currency_pair(&iso, "HELLOO")); // обидві половини — не коди
+        assert!(!is_currency_pair(&iso, "EURGHB")); // друга половина не код
+        assert!(!is_currency_pair(&iso, "EUR")); // не 6 літер
+        assert!(!is_currency_pair(&iso, "EURUS1")); // не лише літери
+    }
+
+    #[test]
+    fn load_iso4217_falls_back_to_embedded() {
+        let iso = load_iso4217(Path::new("definitely/missing/iso.txt")).unwrap();
+        assert!(iso.contains("EUR"));
+    }
+
+    #[test]
+    fn user_words_parses_and_skips_comments() {
+        let words = parse_user_words("# хедер\nлох\n  крякозябри  \n\n# коментар\nEURUSD");
+        assert_eq!(words, vec!["лох", "крякозябри", "EURUSD"]);
+    }
+
+    #[test]
+    fn load_user_words_missing_file_is_empty() {
+        let words = load_user_words(Path::new("definitely/missing/user.txt")).unwrap();
+        assert!(words.is_empty());
     }
 
     #[test]

@@ -89,11 +89,12 @@ mod windows_impl {
                 Action::TypeUnicode(text) => inject::type_unicode(text),
                 Action::DeleteChars(n) => inject::delete_chars(*n),
                 Action::SwitchLayout(id) => {
-                    if let Some(hkl) = layout::hkl_for_layout_id(id) {
+                    // ЛИШЕ серед уже встановлених розкладок — НІКОЛИ не інсталюємо
+                    // (інакше засмічуємо систему дублями). Немає такої мови →
+                    // тихо не перемикаємо (precision > recall; явний опціон — згодом).
+                    if let Some(hkl) = layout::installed_hkl_for_layout_id(id) {
                         inject::switch_layout(hkl);
                     }
-                    // Невідому розкладку тихо ігноруємо: краще не перемкнути, ніж
-                    // перемкнути не туди (precision > recall).
                 }
             }
         }

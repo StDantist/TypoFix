@@ -13,7 +13,7 @@
 
 use typofix_platform::{LayoutId, Modifiers};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyboardLayout, LoadKeyboardLayoutW, MapVirtualKeyExW, ToUnicodeEx, HKL, MAPVK_VK_TO_VSC,
+    GetKeyboardLayout, GetKeyboardLayoutList, MapVirtualKeyExW, ToUnicodeEx, HKL, MAPVK_VK_TO_VSC,
     MAPVK_VSC_TO_VK_EX,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -21,8 +21,26 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindow
 use crate::keystate::fill_key_state;
 
 const VK_SPACE: u32 = 0x20;
-/// Не показувати сповіщення оболонці при завантаженні розкладки.
-const KLF_NOTELLSHELL: u32 = 0x0000_0080;
+
+/// `PRIMARYLANGID` із langid (молодші 10 біт). Збігається для БУДЬ-ЯКОГО варіанта
+/// мови (напр. усі укр. розкладки `0x0422`/`0x0822`/… мають primary `0x22`).
+fn primary_langid(langid: u16) -> u16 {
+    langid & 0x03FF
+}
+
+/// `PRIMARYLANGID` розкладки `hkl` (молодше слово HKL → primary).
+fn primary_langid_of_hkl(hkl: HKL) -> u16 {
+    primary_langid((hkl as usize & 0xFFFF) as u16)
+}
+
+/// Наш [`LayoutId`] → цільовий `PRIMARYLANGID`, або `None` для невідомої мови.
+fn primary_langid_for_id(id: &LayoutId) -> Option<u16> {
+    match id.as_str() {
+        "en" => Some(0x09), // LANG_ENGLISH
+        "uk" => Some(0x22), // LANG_UKRAINIAN
+        _ => None,
+    }
+}
 
 /// `HKL`, активний у потоці вікна на передньому плані (а не нашого потоку).
 pub fn current_hkl() -> HKL {
@@ -37,13 +55,14 @@ pub fn current_hkl() -> HKL {
     }
 }
 
-/// `langid` (молодше слово HKL) → наш [`LayoutId`]. Невідомі — як hex-рядок.
+/// `langid` (молодше слово HKL) → наш [`LayoutId`], матч за `PRIMARYLANGID`.
+/// Невідомі — як hex-рядок повного langid.
 pub fn layout_id_for_hkl(hkl: HKL) -> LayoutId {
     let langid = (hkl as usize & 0xFFFF) as u16;
-    match langid {
-        0x0409 => LayoutId::new("en"),
-        0x0422 => LayoutId::new("uk"),
-        other => LayoutId::new(format!("0x{other:04x}")),
+    match primary_langid(langid) {
+        0x09 => LayoutId::new("en"),
+        0x22 => LayoutId::new("uk"),
+        _ => LayoutId::new(format!("0x{langid:04x}")),
     }
 }
 
@@ -52,24 +71,32 @@ pub fn current_layout_id() -> LayoutId {
     layout_id_for_hkl(current_hkl())
 }
 
-/// Наш [`LayoutId`] → системний `HKL` (через `LoadKeyboardLayoutW`).
-///
-/// Повертає `None`, якщо мову не знаємо або ОС не має такої розкладки.
-/// `LoadKeyboardLayoutW` лише **завантажує** її у процес (не активує — для цього
-/// є окремий `WM_INPUTLANGCHANGEREQUEST` в `inject`).
-pub fn hkl_for_layout_id(id: &LayoutId) -> Option<HKL> {
-    let klid: &str = match id.as_str() {
-        "en" => "00000409",
-        "uk" => "00000422",
-        _ => return None,
-    };
-    let wide: Vec<u16> = klid.encode_utf16().chain(std::iter::once(0)).collect();
-    let hkl = unsafe { LoadKeyboardLayoutW(wide.as_ptr(), KLF_NOTELLSHELL) };
-    if hkl.is_null() {
-        None
-    } else {
-        Some(hkl)
+/// Список `HKL` усіх **уже встановлених** розкладок (через `GetKeyboardLayoutList`).
+/// Нічого не інсталює.
+fn installed_hkls() -> Vec<HKL> {
+    unsafe {
+        let count = GetKeyboardLayoutList(0, std::ptr::null_mut());
+        if count <= 0 {
+            return Vec::new();
+        }
+        let mut list: Vec<HKL> = vec![std::ptr::null_mut(); count as usize];
+        let got = GetKeyboardLayoutList(count, list.as_mut_ptr());
+        list.truncate(got.max(0) as usize);
+        list
     }
+}
+
+/// Наш [`LayoutId`] → `HKL` серед **уже встановлених** розкладок (матч за
+/// `PRIMARYLANGID`).
+///
+/// **НІКОЛИ не встановлює розкладку.** Якщо потрібної мови в системі немає або
+/// мова невідома — `None` (краще не діяти, ніж засмічувати систему). Це залізна
+/// готча: жодного `LoadKeyboardLayoutW`.
+pub fn installed_hkl_for_layout_id(id: &LayoutId) -> Option<HKL> {
+    let target = primary_langid_for_id(id)?;
+    installed_hkls()
+        .into_iter()
+        .find(|&hkl| primary_langid_of_hkl(hkl) == target)
 }
 
 /// Злити можливий мертвий (dead-key) стан розкладки, «натиснувши» пробіл доти,
@@ -144,9 +171,10 @@ pub(crate) fn char_for(scancode: u32, modifiers: Modifiers, hkl: HKL) -> Option<
 }
 
 /// Високорівневий запит без `HKL`: символ для `scancode`+`modifiers` у вказаній
-/// **нашій** розкладці. `None`, якщо розкладки немає в ОС або клавіша «німа».
+/// **нашій** розкладці — лише якщо вона **вже встановлена** в системі. `None`,
+/// якщо розкладки немає (нічого не інсталюємо) або клавіша «німа».
 pub fn char_for_layout(scancode: u32, modifiers: Modifiers, id: &LayoutId) -> Option<char> {
-    let hkl = hkl_for_layout_id(id)?;
+    let hkl = installed_hkl_for_layout_id(id)?;
     char_for(scancode, modifiers, hkl)
 }
 
@@ -159,13 +187,13 @@ pub fn char_for_active_layout(scancode: u32, modifiers: Modifiers) -> Option<cha
 mod tests {
     use super::*;
 
-    /// `LoadKeyboardLayoutW("00000409")` має дати ненульовий HKL, а через нього
-    /// `ToUnicodeEx` — стабільні ASCII-символи US-розкладки. Це детермінований,
-    /// безпечний запит (без ін'єкції вводу й без зміни активної розкладки).
+    /// Якщо US-розкладка **вже встановлена**, `ToUnicodeEx` дає стабільні
+    /// ASCII-символи. Запит без ін'єкції й **без встановлення** розкладки; якщо
+    /// її немає — тест нічого не перевіряє (і нічого не інсталює).
     #[test]
     fn us_layout_ascii_letters_and_digits() {
-        let Some(hkl) = hkl_for_layout_id(&LayoutId::new("en")) else {
-            // US-розкладка не встановлена в системі — нема що перевіряти.
+        let Some(hkl) = installed_hkl_for_layout_id(&LayoutId::new("en")) else {
+            // US-розкладка не встановлена — нема що перевіряти (НЕ інсталюємо).
             return;
         };
         // A (0x1E): 'a' / Shift → 'A'.
@@ -181,15 +209,27 @@ mod tests {
     }
 
     #[test]
-    fn hkl_langid_roundtrips_to_layout_id() {
-        if let Some(hkl) = hkl_for_layout_id(&LayoutId::new("en")) {
+    fn installed_hkl_roundtrips_to_layout_id() {
+        // Для будь-якої встановленої розкладки матч за PRIMARYLANGID симетричний.
+        if let Some(hkl) = installed_hkl_for_layout_id(&LayoutId::new("en")) {
             assert_eq!(layout_id_for_hkl(hkl), LayoutId::new("en"));
+            assert_eq!(primary_langid_of_hkl(hkl), 0x09);
         }
     }
 
     #[test]
     fn unknown_layout_id_has_no_hkl() {
-        assert!(hkl_for_layout_id(&LayoutId::new("zz")).is_none());
+        // Невідома мова → None, і жодного встановлення.
+        assert!(installed_hkl_for_layout_id(&LayoutId::new("zz")).is_none());
+    }
+
+    #[test]
+    fn primary_langid_matches_any_variant() {
+        // Усі англ. варіанти (US 0x0409, UK 0x0809…) → primary 0x09.
+        assert_eq!(primary_langid(0x0409), 0x09);
+        assert_eq!(primary_langid(0x0809), 0x09);
+        // Усі укр. варіанти → primary 0x22.
+        assert_eq!(primary_langid(0x0422), 0x22);
     }
 
     #[test]

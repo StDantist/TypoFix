@@ -85,7 +85,8 @@ npm --prefix ui install
   Порожній канал → `sleep(2ms)`. **Пауза/вихід = стоп потоку**, `Drop` платформи
   знімає хуки (на паузі ввід НЕ перехоплюється взагалі).
 - **`Context` будується щокроку** з: `active_window`/`current_layout` від платформи +
-  `languages`/`config`/`exclusions` (owned у потоці, борроваться) + порожні `WordRules`.
+  `languages`/`config`/`exclusions`/`rules` (owned у потоці, борроваться). `rules`
+  тепер несе whitelist коротких службових слів (див. нижче), не порожній.
 - **Готча — Windows-only:** `typofix-platform-windows` під `[target.'cfg(windows)'.dependencies]`;
   весь код, що торкається `WindowsPlatform` (потік, `EngineHandle`, `engine_loop`),
   під `#[cfg(windows)]`. На не-Windows `start_engine` — no-op (макос-порт згодом).
@@ -99,6 +100,16 @@ npm --prefix ui install
 - `detector_config_from`: `min_word_len`→`min_switch_len` (прямий). `confidence_threshold`
   (0..1) масштабує `base_threshold` монотонно навколо 0.75=дефолт — **тимчасова**
   евристика (внутрішній поріг — лог-ймовірнісний, не 0..1); справжня калібровка у фазі eval.
+- `load_word_rules(pair, data_dir)`: будує `core::WordRules` із whitelist коротких
+  СЛУЖБОВИХ слів (`data/dicts/{lang}.short.txt` через `typofix_data::load_short_words`,
+  далі `WordRules::allow_short_service` per-`LayoutId`). Вмикає **дзеркальну
+  релаксацію порога** коротких слів у детекторі (`от`/`ти`/`we`...). `data_dir` —
+  корінь `data/` (функція додає `dicts/`). Готча: whitelist — НЕ повний словник
+  (`ат`/`ді` Є у `uk.fst` як шум, але НЕ у whitelist → код-токени `fn`/`ls` не
+  перемикаються); деталі — `crates/typofix-core/CLAUDE.md`. Немає data-dir/файлів
+  або помилка читання → порожні rules (фіча вимкнена, **м'яка деградація**). Прокид:
+  `start_engine` → `engine_loop(rules)` → `Context.rules` (раніше передавали
+  `WordRules::new()` — короткі слова у проді не працювали).
 - `load_language_profiles(pair, data_dir)`: uk+en через `typofix-data`. `data_dir` —
   **корінь** `data/`; функція сама додає піддиректорії: `load_layout`←`data/layouts`,
   `load_lm`←`data/lm`, `load_dict`←`data/dicts` (типове `{lang}.{toml,bin,fst}`).

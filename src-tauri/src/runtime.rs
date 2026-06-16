@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use typofix_core::{DetectorConfig, ExclusionRules, LanguageProfile, LayoutId};
+use typofix_core::{DetectorConfig, ExclusionRules, LanguageProfile, LayoutId, WordRules};
 
 use crate::config::{AppSettings, LanguagePair};
 
@@ -107,6 +107,31 @@ pub fn load_language_profiles(
         });
     }
     Ok(profiles)
+}
+
+/// Завантажити курований whitelist коротких СЛУЖБОВИХ слів у [`WordRules`] для
+/// мовної пари. Whitelist лежить у `data/dicts/{lang}.short.txt`; `data_dir` —
+/// **корінь** `data/` (функція сама додає піддиректорію `dicts/`).
+///
+/// Це вмикає дзеркальну релаксацію порога коротких слів у детекторі (`от`/`ти`/
+/// `we`...). Немає каталогу даних / файлів whitelist → порожні правила (фіча
+/// просто вимкнена) — **м'яка деградація, не паніка** (читання помилки теж → пусто).
+/// Чисте path-based IO без хука → тестовно.
+pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>) -> WordRules {
+    let mut rules = WordRules::new();
+    let Some(root) = data_dir else {
+        return rules; // fallback-режим (вбудовані зразки) — whitelist відсутній.
+    };
+    let dict_dir = root.join("dicts");
+    for lang in langs_for(pair) {
+        // Помилка читання трактуємо як «немає whitelist» — не валимо рушій.
+        let words = typofix_data::load_short_words(lang, &dict_dir).unwrap_or_default();
+        let id = LayoutId::new(lang);
+        for w in &words {
+            rules.allow_short_service(&id, w);
+        }
+    }
+    rules
 }
 
 /// Каталог даних для override-моделей: змінна `TYPOFIX_DATA_DIR`, якщо вказує на
@@ -221,6 +246,8 @@ impl RuntimeManager {
         let exclusions = exclusion_rules_from(settings);
         let config = detector_config_from(settings);
         let languages = load_language_profiles(settings.language, data_dir.as_deref())?;
+        // Whitelist коротких службових слів (вмикає дзеркальну релаксацію порога).
+        let rules = load_word_rules(settings.language, data_dir.as_deref());
         let seed = load_learned(&learned_path);
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -233,6 +260,7 @@ impl RuntimeManager {
                     exclusions,
                     config,
                     languages,
+                    rules,
                     seed,
                     learned_path,
                 );
@@ -278,12 +306,13 @@ fn engine_loop(
     exclusions: ExclusionRules,
     config: DetectorConfig,
     languages: Vec<LanguageProfile>,
+    rules: WordRules,
     seed: Vec<String>,
     learned_path: PathBuf,
 ) {
     use std::time::Duration;
 
-    use typofix_core::{step, Action, Context, EngineState, WordRules};
+    use typofix_core::{step, Action, Context, EngineState};
     use typofix_platform::Platform;
     use typofix_platform_windows::WindowsPlatform;
 
@@ -294,8 +323,7 @@ fn engine_loop(
     for word in &seed {
         state.learned.learn(word);
     }
-    // Word-level veto/force ще не в конфігу — поки порожньо (форма Фази 6 їх не має).
-    let rules = WordRules::new();
+    // `rules` містить whitelist коротких службових слів (veto/force ще не в конфігу).
 
     while !stop.load(Ordering::SeqCst) {
         let Some(event) = platform.try_next_event() else {
@@ -439,6 +467,31 @@ mod tests {
         let uk = profiles.iter().find(|p| p.id.as_str() == "uk").unwrap();
         // Справжня uk-LM має оцінювати валідне слово вище за крякозябри.
         assert!(uk.lm.score("привіт") > uk.lm.score("ghbdsn"));
+    }
+
+    #[test]
+    fn word_rules_empty_without_data_dir() {
+        // Fallback-режим (вбудовані зразки) → порожні правила, не паніка.
+        let rules = load_word_rules(LanguagePair::UkEn, None);
+        assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn word_rules_load_short_service_from_data_dir_when_present() {
+        // Доказово лише там, де є реальний `data/` (CI/інша машина — пропуск).
+        let Some(raw) = std::env::var_os("TYPOFIX_DATA_DIR") else {
+            return;
+        };
+        let dir = PathBuf::from(raw);
+        if !dir.join("dicts").join("uk.short.txt").is_file() {
+            return;
+        }
+        let rules = load_word_rules(LanguagePair::UkEn, Some(&dir));
+        assert!(!rules.is_empty());
+        // Куроване службове слово розпізнається per-мова; шум зі словника — ні.
+        assert!(rules.is_short_service(&LayoutId::new("uk"), "от"));
+        assert!(rules.is_short_service(&LayoutId::new("en"), "we"));
+        assert!(!rules.is_short_service(&LayoutId::new("uk"), "ат"));
     }
 
     #[test]

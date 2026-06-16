@@ -142,6 +142,21 @@ pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>) -> WordRules
             rules.allow_short_service(&id, w);
         }
     }
+
+    // Особистий словник (`user.txt`) — ПОЗИТИВНІ визнані слова (жаргон/нікнейми
+    // поза стандартним словником): дають dict-бонус → апка перемикає на них.
+    // М'яка деградація: нема файлу / помилка → порожньо.
+    for w in typofix_data::load_user_words(&dict_dir.join("user.txt")).unwrap_or_default() {
+        rules.recognize_word(&w);
+    }
+
+    // ISO 4217 коди валют — для розпізнавання валютних пар (forex-сигнал
+    // перемикання на латиницю). Нема файлу → вбудований перелік (loader Bruno).
+    if let Ok(codes) = typofix_data::load_iso4217(&dict_dir.join("iso4217.txt")) {
+        for c in &codes {
+            rules.add_currency_code(c);
+        }
+    }
     rules
 }
 

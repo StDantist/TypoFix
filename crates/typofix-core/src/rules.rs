@@ -27,6 +27,18 @@ pub struct WordRules {
     /// вантажить. Порожній за замовчуванням → дзеркальна релаксація вимкнена
     /// (стара поведінка, нуль нового перемикання).
     short_service: Vec<(LayoutId, String)>,
+    /// **Особистий словник користувача** (`data/dicts/user.txt`) — слова, які
+    /// користувач хоче, щоб апка ВИЗНАВАЛА як валідні й ПЕРЕМИКАЛА на них (жаргон/
+    /// нікнейми поза стандартним словником, напр. `лох`). Це ПОЗИТИВНИЙ сигнал
+    /// (НЕ veto): такі слова дають dict-бонус, як звичайний член словника. Мова не
+    /// тегується (двійник у чужій розкладці — біліберда, тож не сплутаєш).
+    recognized: Vec<String>,
+    /// **Активні ISO 4217 alphabetic-коди валют** (UPPERCASE), для розпізнавання
+    /// валютних пар ([`is_currency_pair`]). Дані з `data/dicts/iso4217.txt`
+    /// (loader `typofix-data`). Порожній → forex-сигнал вимкнено.
+    ///
+    /// [`is_currency_pair`]: WordRules::is_currency_pair
+    currency_codes: Vec<String>,
 }
 
 use crate::LayoutId;
@@ -38,6 +50,8 @@ impl WordRules {
             veto: Vec::new(),
             force: Vec::new(),
             short_service: Vec::new(),
+            recognized: Vec::new(),
+            currency_codes: Vec::new(),
         }
     }
 
@@ -93,9 +107,57 @@ impl WordRules {
             .any(|(l, sw)| l == lang && sw == &w)
     }
 
+    /// Додати слово в особистий словник «визнаних» (регістронезалежно). Таке
+    /// слово дає dict-бонус, як звичайний член словника → апка перемикає на нього.
+    pub fn recognize_word(&mut self, word: &str) -> &mut Self {
+        self.recognized.push(word.to_lowercase());
+        self
+    }
+
+    /// Чи `word` — у особистому словнику визнаних (регістронезалежно). Споживає
+    /// детектор як ДОДАТКОВУ dict-членність (поряд із `LanguageProfile.dict`).
+    pub fn recognizes(&self, word: &str) -> bool {
+        if self.recognized.is_empty() {
+            return false;
+        }
+        let w = word.to_lowercase();
+        self.recognized.iter().any(|x| x == &w)
+    }
+
+    /// Додати alphabetic-код валюти ISO 4217 (нормалізується в UPPERCASE).
+    pub fn add_currency_code(&mut self, code: &str) -> &mut Self {
+        self.currency_codes.push(code.to_ascii_uppercase());
+        self
+    }
+
+    /// Чи `token` — **валютна пара**: рівно 6 ASCII-літер, де ОБИДВІ половини
+    /// (по 3) — валідні ISO 4217 коди (регістронезалежно). `EURUSD`/`gbpusd` →
+    /// `true`; випадковий 6-літерний не-пара (`ABCDEF`) → `false`. Дзеркалить
+    /// `typofix_data::is_currency_pair`, але без HashSet (core лишається чистим і
+    /// без зайвих залежностей; перелік малий — лінійна перевірка дешева).
+    pub fn is_currency_pair(&self, token: &str) -> bool {
+        if self.currency_codes.is_empty() || token.len() != 6 || !token.is_ascii() {
+            return false;
+        }
+        if !token.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return false;
+        }
+        let upper = token.to_ascii_uppercase();
+        let (a, b) = upper.split_at(3);
+        self.has_currency_code(a) && self.has_currency_code(b)
+    }
+
+    fn has_currency_code(&self, code: &str) -> bool {
+        self.currency_codes.iter().any(|c| c == code)
+    }
+
     /// Чи набір порожній.
     pub fn is_empty(&self) -> bool {
-        self.veto.is_empty() && self.force.is_empty() && self.short_service.is_empty()
+        self.veto.is_empty()
+            && self.force.is_empty()
+            && self.short_service.is_empty()
+            && self.recognized.is_empty()
+            && self.currency_codes.is_empty()
     }
 }
 
@@ -125,6 +187,37 @@ mod tests {
         r.force_word("ghbdsn");
         assert!(r.forces("GHBDSN"));
         assert!(!r.forces("world"));
+    }
+
+    #[test]
+    fn recognized_words_are_positive_and_case_insensitive() {
+        let mut r = WordRules::new();
+        assert!(!r.recognizes("лох")); // порожній → нічого
+        r.recognize_word("Лох");
+        assert!(r.recognizes("лох")); // регістронезалежно
+        assert!(r.recognizes("ЛОХ"));
+        assert!(!r.recognizes("світ"));
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn currency_pair_requires_both_halves_iso() {
+        let mut r = WordRules::new();
+        assert!(!r.is_currency_pair("EURUSD")); // порожній перелік → false
+        for c in ["EUR", "USD", "GBP", "JPY"] {
+            r.add_currency_code(c);
+        }
+        assert!(r.is_currency_pair("EURUSD"));
+        assert!(r.is_currency_pair("gbpjpy")); // регістронезалежно
+        assert!(r.is_currency_pair("USDGBP"));
+        // Обидві половини мусять бути ISO:
+        assert!(!r.is_currency_pair("EURXXX")); // XXX не в переліку
+        assert!(!r.is_currency_pair("ABCDEF")); // випадковий 6-літерний не-пара
+                                                // Не 6 ASCII-літер:
+        assert!(!r.is_currency_pair("EUR")); // 3
+        assert!(!r.is_currency_pair("EURUSDX")); // 7
+        assert!(!r.is_currency_pair("EUR123")); // цифри
+        assert!(!r.is_currency_pair("ЕУРУСД")); // кирилиця (не ASCII)
     }
 
     #[test]

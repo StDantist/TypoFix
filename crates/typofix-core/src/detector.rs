@@ -67,7 +67,12 @@ impl LanguageProfile {
     /// Поріг `freq_floor` відсікає рідкісні слова/шум корпусу (їхня надбавка = 0,
     /// тобто вони лишаються на baseline — як dict-член без частоти). Так часте
     /// слово дає БІЛЬШИЙ бонус за рідкісне, і `ну`(часте) б'є `ye`(рідкісне).
-    fn score(&self, text: &str, cfg: &DetectorConfig) -> CandidateScore {
+    ///
+    /// **Особистий словник:** `recognized` (з `ctx.rules.recognizes`) додає
+    /// dict-членність ПОЗА `LanguageProfile.dict` — слово з `user.txt` (`лох`)
+    /// дістає той самий baseline `dict_bonus`. Частоти в нього зазвичай немає
+    /// (`freq.log_prob → None` → надбавка 0), тож рівно baseline.
+    fn score(&self, text: &str, cfg: &DetectorConfig, recognized: bool) -> CandidateScore {
         if text.is_empty() {
             return CandidateScore {
                 total: f64::NEG_INFINITY,
@@ -76,7 +81,7 @@ impl LanguageProfile {
             };
         }
         let lm = cfg.lm_weight * self.lm.score(text);
-        let (dict_bonus, freq_term) = if self.dict.contains(text) {
+        let (dict_bonus, freq_term) = if self.dict.contains(text) || recognized {
             // Baseline зберігається ЗАВЖДИ для dict-члена. Частота лише додає
             // зверху для слів, що Є в мапі й частіші за поріг (інакше +0).
             let ft = self
@@ -287,18 +292,18 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
         .map(|p| p.layout.interpret(strokes))
         .unwrap_or_default();
     let current_score = current
-        .map(|p| p.score(&current_text, cfg))
+        .map(|p| p.score(&current_text, cfg, ctx.rules.recognizes(&current_text)))
         .unwrap_or(CandidateScore {
             total: f64::NEG_INFINITY,
             lm: f64::NEG_INFINITY,
             freq: 0.0,
         });
 
-    // Чи ПОТОЧНИЙ текст (двійник у вихідній мові) — реальне слово в її словнику.
-    // Потрібно для дзеркальної релаксації: форсимо коротке лише коли двійник НЕ
-    // справжнє слово (інакше це легітимний короткий ввід — `is`/`db` — не чіпати).
+    // Чи ПОТОЧНИЙ текст (двійник у вихідній мові) — реальне слово (словник АБО
+    // особистий словник). Потрібно для дзеркальної релаксації: форсимо коротке
+    // лише коли двійник НЕ справжнє слово (легітимний короткий ввід не чіпати).
     let current_is_dict = current
-        .map(|p| p.dict.contains(&current_text))
+        .map(|p| p.dict.contains(&current_text) || ctx.rules.recognizes(&current_text))
         .unwrap_or(false);
 
     // Початково найкраща — поточна (щоб за відсутності переваги нічого не міняти).
@@ -309,13 +314,42 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
 
     for p in ctx.languages {
         let text = p.layout.interpret(strokes);
-        let sc = p.score(&text, cfg);
+        let recognized = ctx.rules.recognizes(&text);
+        let sc = p.score(&text, cfg, recognized);
         if sc.total > best_score.total {
             best_score = sc;
             best = p.id.clone();
-            best_is_dict = p.dict.contains(&text);
+            best_is_dict = p.dict.contains(&text) || recognized;
             best_text = text;
         }
+    }
+
+    // **Forex: валютна пара в кандидатній (латинській) розкладці — сильний сигнал
+    // «це англійське, перемикай на латиницю».** `is_currency_pair` пропускає лише
+    // 6-літерний токен, де ОБИДВІ половини — валідні ISO-коди (EURUSD); кирилична
+    // інтерпретація (не-ASCII) ніколи не матчить, тож скануємо всі кандидати
+    // безпечно. Фільтр `p.id != current_layout` лишає КОРЕКТНО набрану латиницею
+    // пару недоторканою (best == current → не перемикаємо). Перемога forex форсить
+    // перемикання в обхід порогу/довжини (але НЕ veto і НЕ best≠current).
+    let forex = ctx
+        .languages
+        .iter()
+        .filter(|p| p.id != ctx.current_layout)
+        .find_map(|p| {
+            let text = p.layout.interpret(strokes);
+            if ctx.rules.is_currency_pair(&text) {
+                let sc = p.score(&text, cfg, false);
+                Some((p.id.clone(), text, sc))
+            } else {
+                None
+            }
+        });
+    let forex_forced = forex.is_some();
+    if let Some((lang, text, sc)) = forex {
+        best = lang;
+        best_text = text;
+        best_is_dict = true;
+        best_score = sc; // когерентна confidence у звіті (рішення дає forex_forced)
     }
 
     let len = current_text.chars().count();
@@ -361,7 +395,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let switch = current.is_some()
         && best != ctx.current_layout
         && !vetoed
-        && (forced || standard_ok || mirror_ok);
+        && (forced || standard_ok || mirror_ok || forex_forced);
 
     BranchEval {
         best,
@@ -1340,15 +1374,15 @@ mod tests {
         // Мапа без слова «ну» (інші слова є) → log_prob(ну)=None → надбавка 0.
         let map = freq_map(&[("та", 80_000), ("zzz", 4_300_000)]);
         let uk = freq_uk_profile(Some(map));
-        let with_freq = uk.score("ну", &cfg);
-        let baseline = freq_uk_profile(None).score("ну", &cfg);
+        let with_freq = uk.score("ну", &cfg, false);
+        let baseline = freq_uk_profile(None).score("ну", &cfg, false);
         assert_eq!(
             with_freq.total, baseline.total,
             "dict-член без freq-запису має лишатись на baseline (без штрафу)"
         );
         assert_eq!(with_freq.freq, 0.0, "немає freq-запису → надбавка 0");
         // А слово, що Є в мапі й часте, отримує СТРОГО більший бал.
-        let common = freq_uk_profile(Some(uk_freq_common_nu())).score("ну", &cfg);
+        let common = freq_uk_profile(Some(uk_freq_common_nu())).score("ну", &cfg, false);
         assert!(
             common.total > baseline.total && common.freq > 0.0,
             "часте слово з freq-записом має давати більший бонус за baseline"
@@ -1362,7 +1396,185 @@ mod tests {
         let cfg = DetectorConfig::default();
         // ну з мізерним count у великому корпусі → lp ≪ floor(-9).
         let rare = freq_map(&[("ну", 2), ("zzz", 4_300_000)]);
-        let s = freq_uk_profile(Some(rare)).score("ну", &cfg);
+        let s = freq_uk_profile(Some(rare)).score("ну", &cfg, false);
         assert_eq!(s.freq, 0.0, "рідкісне слово нижче freq_floor → надбавка 0");
+    }
+
+    // --- Особистий словник (user.txt) = ПОЗИТИВНИЙ сигнал перемикання ----------
+    // Фіз-позиції: л=k(0x25), о=j(0x24), х=`[`(0x1A). «лох» закінчується на `х`,
+    // що в en — пунктуація `[` → задіює й дизамбігуацію пунктуації-літери.
+
+    fn user_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x25, KeyCap::letter('k', 'K')),
+                (0x24, KeyCap::letter('j', 'J')),
+                (0x1A, KeyCap::letter('[', '{')),
+            ],
+        );
+        let lm = NgramModel::train("key just kill keep", 3, 0.5);
+        let dict = Dictionary::from_words(["key", "just"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn user_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x25, KeyCap::letter('л', 'Л')),
+                (0x24, KeyCap::letter('о', 'О')),
+                (0x1A, KeyCap::letter('х', 'Х')),
+            ],
+        );
+        let lm = NgramModel::train("лол хата холод охайо", 3, 0.5);
+        // «лох» НАВМИСНО поза стандартним словником (як у реалі: VESUM-фільтр) —
+        // ловиться ЛИШЕ через особистий словник.
+        let dict = Dictionary::from_words(["хата", "холод"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    #[test]
+    fn user_word_switches_via_personal_dictionary() {
+        let langs = [user_en_profile(), user_uk_profile()];
+        let mut rules = WordRules::new();
+        rules.recognize_word("лох");
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x25, 0x24, 0x1A]), &ctx); // en "kj[" / uk "лох"
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert_eq!(d.best_text, "лох");
+        assert!(
+            d.switch,
+            "user-слово має перемкнутися (conf={})",
+            d.confidence
+        );
+
+        // Контроль причинності: без особистого словника «лох» (поза dict) НЕ
+        // ловиться — саме user.txt його визнає.
+        let plain = ctx_with(&langs, "en");
+        let d0 = decide(&strokes(&[0x25, 0x24, 0x1A]), &plain);
+        assert!(
+            !d0.switch,
+            "без user.txt 'лох' (поза словником) не перемикати (conf={})",
+            d0.confidence
+        );
+    }
+
+    // --- Forex: валютна пара = ПОЗИТИВНИЙ сигнал перемикання на латиницю -------
+    // Фіз-позиції: e=0x12,u=0x16,r=0x13,s=0x1F,d=0x20; uk-двійники у/г/к/і/в.
+
+    fn forex_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x12, KeyCap::letter('e', 'E')),
+                (0x16, KeyCap::letter('u', 'U')),
+                (0x13, KeyCap::letter('r', 'R')),
+                (0x1F, KeyCap::letter('s', 'S')),
+                (0x20, KeyCap::letter('d', 'D')),
+            ],
+        );
+        let lm = NgramModel::train("euro user reads dress", 3, 0.5);
+        let dict = Dictionary::from_words(["euro", "user"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn forex_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x12, KeyCap::letter('у', 'У')),
+                (0x16, KeyCap::letter('г', 'Г')),
+                (0x13, KeyCap::letter('к', 'К')),
+                (0x1F, KeyCap::letter('і', 'І')),
+                (0x20, KeyCap::letter('в', 'В')),
+            ],
+        );
+        let lm = NgramModel::train("гра кіно вода рука", 3, 0.5);
+        let dict = Dictionary::from_words(["гра", "вода"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn forex_rules(codes: &[&str]) -> WordRules {
+        let mut r = WordRules::new();
+        for c in codes {
+            r.add_currency_code(c);
+        }
+        r
+    }
+
+    // EURUSD на фіз-клавішах: e u r u s d.
+    const EURUSD: [u32; 6] = [0x12, 0x16, 0x13, 0x16, 0x1F, 0x20];
+
+    #[test]
+    fn forex_pair_switches_from_cyrillic_layout() {
+        // Валютна пара, набрана у ВИПАДКОВО ввімкненій UK-розкладці → кирилична
+        // каша на екрані; forex впевнено перемикає на латиницю.
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let rules = forex_rules(&["EUR", "USD", "GBP"]);
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        let d = decide(&strokes(&EURUSD), &ctx);
+        assert_eq!(d.current_text, "угкгів");
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "eurusd");
+        assert!(
+            d.switch,
+            "валютна пара має перемкнутись (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn forex_correct_latin_pair_is_not_touched() {
+        // Та сама пара, але вже КОРЕКТНО в EN → не ламати (best==current, фільтр
+        // `p.id != current_layout` лишає її недоторканою).
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let rules = forex_rules(&["EUR", "USD"]);
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&EURUSD), &ctx);
+        assert_eq!(d.current_text, "eurusd");
+        assert!(!d.switch, "коректну латинську пару не чіпати");
+    }
+
+    #[test]
+    fn forex_needs_both_halves_iso_no_force_otherwise() {
+        // USD НЕ в переліку → «eurusd» не пара → forex НЕ форсить. Доводимо
+        // детерміновано: рішення з half-переліком ІДЕНТИЧНЕ рішенню взагалі без
+        // forex-правил (адже forex-гілка не спрацювала). Чистоту is_currency_pair
+        // окремо стереже юніт у `rules.rs`.
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let half = forex_rules(&["EUR"]); // лише половина пари
+        let none = WordRules::new();
+        let d_half = decide(&strokes(&EURUSD), &ctx_with_rules(&langs, "uk", &half));
+        let d_none = decide(&strokes(&EURUSD), &ctx_with_rules(&langs, "uk", &none));
+        assert_eq!(
+            d_half.switch, d_none.switch,
+            "не-пара не повинна форситись як валютна"
+        );
+        assert_eq!(d_half.best, d_none.best, "forex-гілка не мала змінити best");
     }
 }

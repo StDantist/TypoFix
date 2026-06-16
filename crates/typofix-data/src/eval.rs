@@ -279,6 +279,16 @@ pub fn build_word_rules(langs: &[&str]) -> WordRules {
             rules.allow_short_service(&id, &w);
         }
     }
+    // Особистий словник (`user.txt`, позитивні визнані слова) + ISO 4217 коди для
+    // forex-сигналу — щоб eval вимірював precision і з цими шарами.
+    for w in crate::load_user_words(&dict_dir.join("user.txt")).unwrap_or_default() {
+        rules.recognize_word(&w);
+    }
+    if let Ok(codes) = crate::load_iso4217(&dict_dir.join("iso4217.txt")) {
+        for c in &codes {
+            rules.add_currency_code(c);
+        }
+    }
     rules
 }
 

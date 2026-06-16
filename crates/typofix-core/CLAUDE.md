@@ -99,6 +99,50 @@
   Стереже: юніти `freq_*`/`no_freq_layer_*` (герметичні) + `tests/recall_freq_weighted.rs`
   (реальні моделі: `ну`→`ye` TP, `us`/`is`/`to`/`we` precision-гард) + юніти `freq.rs`.
 
+## Особистий словник (`user.txt`) = ПОЗИТИВНИЙ сигнал, НЕ veto (готча — семантика!)
+
+**Неочевидне + суперечить data/CLAUDE.md.** Bruno задокументував `user.txt` як
+«never-touch **veto**»; **МИ ЗМІНИЛИ семантику на ПОЗИТИВНУ.** `user.txt` =
+слова, які користувач хоче, щоб апка ВИЗНАВАЛА як валідні й ПЕРЕМИКАЛА на них
+(жаргон/нікнейми поза стандартним словником, напр. `лох`). Не «не чіпати», а
+«додаткова dict-членність».
+
+- **Механіка:** `WordRules.recognized` (Vec, поряд із veto/force/short_service —
+  щоб не міняти форму `Context`/`WordRules::new() const fn`). `recognizes(word)` →
+  детектор у `score()` трактує як dict-hit: `self.dict.contains(text) || recognized`
+  → той самий baseline `dict_bonus`. Freq-запису в user-слова зазвичай немає
+  (`log_prob → None` → надбавка 0) → рівно baseline.
+- **`best_is_dict` теж включає recognized** — інакше precision-замок гілки-літери
+  (`use_letter`) відкидав би `лох` (кінцеве `х`=`[` → дизамбігуація пунктуації).
+- **Проводка:** `runtime.rs::load_word_rules` + `eval::build_word_rules` вантажать
+  `data/dicts/user.txt` через `typofix_data::load_user_words` (м'яка деградація:
+  нема/порожній → нічого). Шаблон у git порожній (нуль впливу на eval).
+- **Звірити з Bruno (follow-up, не блокер):** `data/CLAUDE.md` досі описує `user.txt`
+  veto-формулюванням — оркестратор узгодить опис із цією позитивною семантикою.
+- Стереже: юніт `user_word_switches_via_personal_dictionary` (+ контроль причинності
+  без user.txt) і `tests/recall_user_forex.rs` (реальні моделі, `лох`).
+
+## Forex-пари — позитивний сигнал перемикання на латиницю (готча!)
+
+**Неочевидне.** Коли EN-двійник кандидата — валідна **валютна пара**
+(`is_currency_pair`), це сильний сигнал «це англійське». Пара, набрана у випадково
+ввімкненій укр. розкладці (кирилична каша), впевнено перемикається на `EURUSD`.
+
+- **`WordRules.is_currency_pair(token)`:** рівно 6 ASCII-літер, ОБИДВІ половини
+  (по 3) ∈ ISO 4217. Дзеркалить `typofix_data::is_currency_pair`, але БЕЗ HashSet
+  (core чистий; перелік ~150 кодів → лінійна перевірка дешева, лише для 6-літерних).
+- **У детекторі (`eval_branch`):** скануємо кандидатів `p.id != current_layout`; якщо
+  інтерпретація — пара, ФОРСИМО `best`=цей кандидат і `forex_forced` (в обхід
+  порогу/довжини, але НЕ veto і НЕ `best≠current`). Кирилична інтерпретація не-ASCII
+  → ніколи не матчить, тож скан безпечний.
+- **PRECISION:** обидві половини мусять бути ISO (`ABCDEF`/`EURXXX` → ні) — на eval
+  нуль FP навіть із повним ISO-переліком. **Коректно набрану латиницею пару НЕ
+  ламаємо:** фільтр `p.id != current_layout` → `best==current` → не перемикаємо.
+- **Проводка:** `load_word_rules`/`build_word_rules` вантажать `data/dicts/iso4217.txt`
+  через `typofix_data::load_iso4217` (нема файлу → вбудований перелік Bruno).
+- Стереже: юніти `forex_*` (герметичні) + `currency_pair_requires_both_halves_iso`
+  (`rules.rs`) + `tests/recall_user_forex.rs` (реальні: обидва напрями пари).
+
 ## Дзеркальна релаксація порога для КОРОТКИХ службових слів (готча!)
 
 **Неочевидне:** короткі службові слова (`і`,`ти`,`чи`,`от`,`we`,`is`-двійники)

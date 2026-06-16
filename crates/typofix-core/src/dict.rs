@@ -10,6 +10,25 @@ use std::collections::BTreeSet;
 
 use fst::{Set, Streamer};
 
+/// Звести всі апострофоподібні символи до канонічного `canon`.
+///
+/// **Готча — апостроф у двох виглядах.** Український апостроф приходить у двох
+/// кодпойнтах: ASCII `'` (U+0027, яким записаний морфословник VESUM,
+/// `data/dicts/uk.full.txt`) і типографський `’` (U+2019, що його генерує
+/// розкладка з `uk.toml` для тієї ж клавіші). Для dict-lookup їх ТРЕБА вважати
+/// одним символом — інакше `сім'я` (зі словника) і `сім’я` (з розкладки) стають
+/// різними ключами, і апострофні слова (тисячі у VESUM) промахуються повз
+/// словник → не ловляться. Апостроф — не літера, тож регістр його не зачіпає.
+fn normalize_apostrophes(s: &str, canon: char) -> String {
+    s.chars()
+        .map(|c| match c {
+            // ASCII ', right single quote, modifier letter apostrophe, left single quote.
+            '\u{0027}' | '\u{2019}' | '\u{02BC}' | '\u{2018}' => canon,
+            other => other,
+        })
+        .collect()
+}
+
 /// Незмінна множина слів однієї мови, побудована на FST.
 ///
 /// Слова зберігаються у нижньому регістрі; [`contains`] теж зводить запит до
@@ -32,9 +51,12 @@ impl Dictionary {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        // Зводимо до нижнього регістру І канонізуємо апостроф до ASCII U+0027,
+        // щоб новозбудовані словники були апостроф-консистентні (див.
+        // [`normalize_apostrophes`]). Запит у `contains` канонізується дзеркально.
         let sorted: BTreeSet<String> = words
             .into_iter()
-            .map(|w| w.as_ref().to_lowercase())
+            .map(|w| normalize_apostrophes(&w.as_ref().to_lowercase(), '\u{0027}'))
             .filter(|w| !w.is_empty())
             .collect();
         let set = Set::from_iter(sorted)?;
@@ -63,9 +85,24 @@ impl Dictionary {
         self.set.is_empty()
     }
 
-    /// Чи є слово у словнику (регістронезалежно).
+    /// Чи є слово у словнику (регістронезалежно, апостроф-нормалізовано).
+    ///
+    /// Готовий `.fst` із диска може зберігати апостроф у будь-якому вигляді
+    /// (VESUM-частина — ASCII `'` U+0027, корпусна — типографський `’` U+2019),
+    /// а сам запит приходить із розкладки як U+2019. Тож пробуємо обидва канони:
+    /// слово в обидвох виглядах апострофа — той самий ключ (див.
+    /// [`normalize_apostrophes`]). Без апострофа — рівно один lookup.
     pub fn contains(&self, word: &str) -> bool {
-        self.set.contains(word.to_lowercase())
+        let lower = word.to_lowercase();
+        if self.set.contains(&lower) {
+            return true;
+        }
+        let ascii = normalize_apostrophes(&lower, '\u{0027}');
+        if ascii != lower && self.set.contains(&ascii) {
+            return true;
+        }
+        let typo = normalize_apostrophes(&lower, '\u{2019}');
+        typo != lower && self.set.contains(&typo)
     }
 
     /// Усі слова словника у відсортованому порядку (для тестів/дебагу).
@@ -98,6 +135,30 @@ mod tests {
         assert!(d.contains("hello"));
         assert!(!d.contains("ghbdsn"));
         assert!(!d.contains("qwerty"));
+    }
+
+    #[test]
+    fn apostrophe_variants_match_either_storage() {
+        // Словник зі словом, записаним ASCII-апострофом U+0027 (як у VESUM):
+        // запит типографським U+2019 (як генерує розкладка) має знаходити.
+        let ascii = Dictionary::from_words(["сім'я"]).unwrap();
+        assert!(ascii.contains("сім'я"), "U+0027 запит");
+        assert!(
+            ascii.contains("сім’я"),
+            "U+2019 запит має матчити U+0027 запис"
+        );
+
+        // Слово, ПОДАНЕ при побудові з U+2019: `from_words` канонізує його до
+        // U+0027, тож обидва варіанти запиту все одно знаходять.
+        let typo_built = Dictionary::from_words(["комп’ютер"]).unwrap();
+        assert!(typo_built.contains("комп'ютер"), "U+0027 запит");
+        assert!(typo_built.contains("комп’ютер"), "U+2019 запит");
+
+        // Модифікаторний апостроф U+02BC теж канонізується.
+        assert!(ascii.contains("сім\u{02BC}я"), "U+02BC запит");
+
+        // Без апострофа поведінка незмінна.
+        assert!(!ascii.contains("сімя"));
     }
 
     #[test]

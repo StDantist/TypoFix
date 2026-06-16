@@ -18,6 +18,7 @@ node_modules
 # Data artifacts (large generated models/corpora — keep sources/scripts, not outputs)
 /data/lm/*.bin
 /data/dicts/*.fst
+/data/dicts/*.full.txt
 /data/corpora/
 
 # OS / editor

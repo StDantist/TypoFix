@@ -77,6 +77,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        // Влити ПОВНИЙ морфословник (data/dicts/{lang}.full.txt), якщо є —
+        // мільйони словоформ (uk: VESUM/dict_uk). Gitignored, готує fetch_dict_uk.py.
+        // Один рядок = одна форма (lowercase, без коментарів). FST дедуплікує.
+        let full_path = dict_dir.join(format!("{lang}.full.txt"));
+        if let Ok(full) = std::fs::read_to_string(&full_path) {
+            for line in full.lines() {
+                let w = line.trim();
+                if !w.is_empty() {
+                    words.push(w.to_owned());
+                }
+            }
+            println!("[{lang}] влито повний словник {}", full_path.display());
+        }
         let dict = build_dict(words.iter().map(String::as_str))?;
         let dict_path = dict_dir.join(format!("{lang}.fst"));
         save_dict(&dict, &dict_path)?;

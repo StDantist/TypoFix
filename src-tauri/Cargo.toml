@@ -26,6 +26,16 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Ядро + спільні типи + завантаження даних. Path-залежності на крейти КОРЕНЕВОГО
+# workspace; це НЕ робить src-tauri його членом (ізоляція зберігається).
+typofix-core = { path = "../crates/typofix-core" }
+typofix-platform = { path = "../crates/typofix-platform" }
+typofix-data = { path = "../crates/typofix-data" }
+
+# Жива платформа лише на Windows. На інших цілях рантайм-цикл — no-op заглушка
+# (macOS-порт у майбутньому), тож крейт сюди не тягнемо.
+[target.'cfg(windows)'.dependencies]
+typofix-platform-windows = { path = "../crates/typofix-platform-windows" }
 
 [features]
 # Дефолтна продакшн-конфігурація Tauri (custom protocol для вшитого фронтенду).

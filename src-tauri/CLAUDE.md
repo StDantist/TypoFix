@@ -75,6 +75,44 @@ npm --prefix ui install
   подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
   `enabled`, не чіпаючи можливих незбережених правок у формі.
 
+## Рантайм-цикл рушія (`runtime.rs`) — серце Фази 5
+Зв'язує живу платформу (Windows-хук) із чистим ядром.
+- **`RuntimeManager`** (Tauri-стан за `Mutex`) керує життям потоку `typofix-engine`.
+  `apply(settings, learned_path, data_dir)`: увімкнено → (пере)старт потоку; пауза/
+  вимкнено → стоп. Викликається в `setup`, у трей-toggle і в `save_settings`.
+- **Потік рушія** створює `WindowsPlatform::new()` (ставить системні хуки!), у циклі
+  тягне `try_next_event()` → `typofix_core::step(state, ev, ctx)` → `platform.apply(action)`.
+  Порожній канал → `sleep(2ms)`. **Пауза/вихід = стоп потоку**, `Drop` платформи
+  знімає хуки (на паузі ввід НЕ перехоплюється взагалі).
+- **`Context` будується щокроку** з: `active_window`/`current_layout` від платформи +
+  `languages`/`config`/`exclusions` (owned у потоці, борроваться) + порожні `WordRules`.
+- **Готча — Windows-only:** `typofix-platform-windows` під `[target.'cfg(windows)'.dependencies]`;
+  весь код, що торкається `WindowsPlatform` (потік, `EngineHandle`, `engine_loop`),
+  під `#[cfg(windows)]`. На не-Windows `start_engine` — no-op (макос-порт згодом).
+  Маппінг/завантаження/персистенція — кросплатформні (компілюються й тестуються всюди).
+- **`tauri dev` НЕ запускати** (ставить реальні хуки + інтерактив). Живий прогін —
+  контрольовано, як зі спайком. Досить компіляції + тестів мапінгу.
+
+## Маппінг конфіг → ядро (`runtime.rs`, чисте, тестоване)
+- `exclusion_rules_from` → `core::ExclusionRules` (process/exe/folder; нормалізацію
+  шляхів робить core).
+- `detector_config_from`: `min_word_len`→`min_switch_len` (прямий). `confidence_threshold`
+  (0..1) масштабує `base_threshold` монотонно навколо 0.75=дефолт — **тимчасова**
+  евристика (внутрішній поріг — лог-ймовірнісний, не 0..1); справжня калібровка у фазі eval.
+- `load_language_profiles`: uk+en через `typofix-data` (`load_layout/load_lm/load_dict`).
+  `data_dir=None` → вбудовані зразки (наскрізна робота); реальні `.bin`/`.fst` —
+  через override-каталог, коли з'являться (TODO у `sync_runtime`).
+
+## Самонавчання — файл навчених винятків
+- **Де:** `learned_exceptions.txt` у **тому ж** app config dir, що й `settings.json`
+  (`%APPDATA%\dev.typofix.app\`). По одному слову на рядок.
+- **Потік:** рушій емітить `Action::CommitException(word)` (юзер відкинув перенабір)
+  → app дозаписує слово (`append_learned`). На старті `load_learned` засіває
+  `EngineState.learned` через `learn()` (дедуп у пам'яті). Ядро саме НІЧОГО не
+  персистить (лишається чистим). Приватність: лише самі слова, локально.
+- `LearnedExceptions` не має геттера слів — тому персистимо НЕ читанням стану ядра,
+  а перехопленням потоку `CommitException` на app-шарі.
+
 ## Дозволи (capabilities) — НЕ забути при додаванні команд/плагінів
 `capabilities/default.json` (window `settings`) перелічує дозволи. Без потрібного
 дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,

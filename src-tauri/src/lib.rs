@@ -5,6 +5,7 @@
 //! під'єднання ядра/платформи позначено `TODO` (Фаза 5).
 
 mod config;
+mod runtime;
 
 use std::sync::Mutex;
 
@@ -15,6 +16,7 @@ use tauri::{
 };
 
 use config::AppSettings;
+use runtime::RuntimeManager;
 
 /// Глобальний стан застосунку в треї: повний конфіг у пам'яті.
 /// Диск — джерело істини; ця копія тримається синхронізованою при save/toggle.
@@ -97,6 +99,25 @@ fn build_tray_menu(app: &AppHandle, enabled: bool) -> tauri::Result<Menu<Wry>> {
     )
 }
 
+/// Привести рантайм-цикл рушія у відповідність до налаштувань (старт/стоп/рестарт).
+/// Помилки не валять застосунок — лише лог; GUI лишається живим.
+fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
+    let learned_path = match config::config_dir(app) {
+        Ok(dir) => dir.join(runtime::LEARNED_FILE),
+        Err(err) => {
+            eprintln!("TypoFix: немає каталогу для навчених винятків: {err}");
+            return;
+        }
+    };
+    let manager = app.state::<Mutex<RuntimeManager>>();
+    let mut guard = manager.lock().expect("RuntimeManager отруєно");
+    // data_dir = None → беруться вбудовані зразки моделей (наскрізна робота).
+    // TODO(models): підставити реальний каталог `.bin`/`.fst`, коли з'являться.
+    if let Err(err) = guard.apply(settings, learned_path, None) {
+        eprintln!("TypoFix: рушій не стартував: {err}");
+    }
+}
+
 /// Оновити трей-меню й tooltip під поточний `enabled`.
 fn refresh_tray(app: &AppHandle, enabled: bool) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -129,6 +150,8 @@ fn toggle_enabled(app: &AppHandle) {
         eprintln!("TypoFix: не вдалося зберегти конфіг із трею: {err}");
     }
     refresh_tray(app, snapshot.enabled);
+    // Старт/стоп рушія під новий стан (пауза знімає хуки).
+    sync_runtime(app, &snapshot);
     // Сповіщаємо фронтенд (повним конфігом — вікно вирішить, що оновити).
     let _ = app.emit(EVENT_SETTINGS_CHANGED, snapshot);
 }
@@ -153,6 +176,8 @@ fn save_settings(
     config::save_to_disk(&app, &cleaned)?;
     *state.settings.lock().expect("AppState отруєно") = cleaned.clone();
     refresh_tray(&app, cleaned.enabled);
+    // Перебудувати рантайм-цикл під нові виключення/детектор/мову.
+    sync_runtime(&app, &cleaned);
     Ok(cleaned)
 }
 
@@ -161,6 +186,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .manage(Mutex::new(RuntimeManager::default()))
         .invoke_handler(tauri::generate_handler![load_settings, save_settings])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -171,7 +197,10 @@ pub fn run() {
             *app.state::<AppState>()
                 .settings
                 .lock()
-                .expect("AppState отруєно") = initial;
+                .expect("AppState отруєно") = initial.clone();
+
+            // Піднімаємо рушій, якщо застосунок увімкнено (на паузі — нічого).
+            sync_runtime(&handle, &initial);
 
             let menu = build_tray_menu(&handle, enabled)?;
 
@@ -213,7 +242,14 @@ pub fn run() {
             MENU_AUTOSTART => {
                 // TODO(autostart): під'єднати tauri-plugin-autostart enable/disable.
             }
-            MENU_QUIT => app.exit(0),
+            MENU_QUIT => {
+                // Коректно знімаємо хуки перед виходом.
+                app.state::<Mutex<RuntimeManager>>()
+                    .lock()
+                    .expect("RuntimeManager отруєно")
+                    .shutdown();
+                app.exit(0);
+            }
             _ => {}
         })
         .on_window_event(|window, event| {

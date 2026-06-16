@@ -122,13 +122,17 @@ fn dedup_nonempty(items: Vec<String>) -> Vec<String> {
     seen
 }
 
-/// Повний шлях до файлу конфігу (створює базовий каталог за потреби — ні).
-fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
+/// Каталог конфігу застосунку (Tauri app config dir). Тут живуть `settings.json`
+/// і файл навчених винятків.
+pub fn config_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
         .app_config_dir()
-        .map_err(|e| format!("немає каталогу конфігу застосунку: {e}"))?;
-    Ok(dir.join(SETTINGS_FILE))
+        .map_err(|e| format!("немає каталогу конфігу застосунку: {e}"))
+}
+
+/// Повний шлях до файлу конфігу.
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join(SETTINGS_FILE))
 }
 
 /// Прочитати конфіг із диска. Файлу немає → дефолти (перший запуск).

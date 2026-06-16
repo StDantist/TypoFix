@@ -95,6 +95,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bincode"
+version = "1.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f45e9417d87227c7a56d22e471c6206462cba514c7590c09aff4cf6d1ddcad"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "bit-set"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,6 +827,12 @@ checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "fst"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
 
 [[package]]
 name = "futures-channel"
@@ -3663,6 +3678,47 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "typofix-core",
+ "typofix-data",
+ "typofix-platform",
+ "typofix-platform-windows",
+]
+
+[[package]]
+name = "typofix-core"
+version = "0.1.0"
+dependencies = [
+ "fst",
+ "serde",
+ "typofix-platform",
+]
+
+[[package]]
+name = "typofix-data"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "fst",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml 0.8.2",
+ "typofix-core",
+]
+
+[[package]]
+name = "typofix-platform"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.0",
+]
+
+[[package]]
+name = "typofix-platform-windows"
+version = "0.1.0"
+dependencies = [
+ "typofix-platform",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

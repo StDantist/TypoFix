@@ -32,19 +32,38 @@ pub struct LanguageProfile {
     pub dict: Dictionary,
 }
 
+/// Розкладений бал кандидата: повний (`total`) і **лише LM-складова** (`lm`).
+///
+/// LM-складова потрібна окремо, бо для дуже коротких слів ми вимагаємо, щоб
+/// перевагу давав не лише збіг у словнику, а й сама мовна модель (див.
+/// [`DetectorConfig::short_word_lm_margin`]).
+#[derive(Debug, Clone, Copy)]
+struct CandidateScore {
+    /// Повний бал: `lm_weight·lm + (dict ? dict_bonus : 0)`.
+    total: f64,
+    /// Лише зважена LM-складова: `lm_weight·lm` (без бонусу словника).
+    lm: f64,
+}
+
 impl LanguageProfile {
     /// Бал кандидата для заданого тексту (вже інтерпретованого в його розкладці).
-    fn score(&self, text: &str, cfg: &DetectorConfig) -> f64 {
+    fn score(&self, text: &str, cfg: &DetectorConfig) -> CandidateScore {
         if text.is_empty() {
-            return f64::NEG_INFINITY;
+            return CandidateScore {
+                total: f64::NEG_INFINITY,
+                lm: f64::NEG_INFINITY,
+            };
         }
-        let lm = self.lm.score(text);
+        let lm = cfg.lm_weight * self.lm.score(text);
         let bonus = if self.dict.contains(text) {
             cfg.dict_bonus
         } else {
             0.0
         };
-        cfg.lm_weight * lm + bonus
+        CandidateScore {
+            total: lm + bonus,
+            lm,
+        }
     }
 }
 
@@ -63,6 +82,14 @@ pub struct DetectorConfig {
     /// Мінімальна довжина слова, яке взагалі можна перемикати (коротші —
     /// неоднозначні в обох мовах, не чіпаємо).
     pub min_switch_len: usize,
+    /// Максимальна довжина «дуже короткого» слова, для якого збігу в словнику
+    /// САМОГО ПО СОБІ недостатньо: на таких словах `dict_bonus ≈ threshold`, тож
+    /// одинокий збіг у словнику тривіально пробиває поріг (FP типу `fn`→«ат`).
+    pub short_word_max_len: usize,
+    /// Для слів `len <= short_word_max_len` вимагаємо, щоб LM-складова кандидата
+    /// перевищувала LM-складову поточної розкладки щонайменше на цей запас —
+    /// тобто за кандидата має «голосувати» і мовна модель, а не лише словник.
+    pub short_word_lm_margin: f64,
 }
 
 impl Default for DetectorConfig {
@@ -73,6 +100,8 @@ impl Default for DetectorConfig {
             base_threshold: 1.0,
             short_word_extra: 6.0,
             min_switch_len: 2,
+            short_word_max_len: 2,
+            short_word_lm_margin: 2.0,
         }
     }
 }
@@ -120,7 +149,10 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
         .unwrap_or_default();
     let current_score = current
         .map(|p| p.score(&current_text, cfg))
-        .unwrap_or(f64::NEG_INFINITY);
+        .unwrap_or(CandidateScore {
+            total: f64::NEG_INFINITY,
+            lm: f64::NEG_INFINITY,
+        });
 
     // Початково найкраща — поточна (щоб за відсутності переваги нічого не міняти).
     let mut best = ctx.current_layout.clone();
@@ -130,7 +162,7 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     for p in ctx.languages {
         let text = p.layout.interpret(strokes);
         let sc = p.score(&text, cfg);
-        if sc > best_score {
+        if sc.total > best_score.total {
             best_score = sc;
             best = p.id.clone();
             best_text = text;
@@ -138,7 +170,11 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     }
 
     let len = current_text.chars().count();
-    let confidence = best_score - current_score;
+    let confidence = best_score.total - current_score.total;
+    // LM-перевага кандидата БЕЗ бонусу словника: для дуже коротких слів вимагаємо,
+    // щоб за кандидата голосувала і сама модель, а не лише збіг у словнику.
+    let lm_confidence = best_score.lm - current_score.lm;
+    let short_word_ok = len > cfg.short_word_max_len || lm_confidence > cfg.short_word_lm_margin;
 
     // Правила рівня слова: veto (захист precision) має пріоритет; force дозволяє
     // перемкнути в обхід порогу/довжини (але не в обхід veto чи best≠current).
@@ -148,7 +184,8 @@ pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     let switch = current.is_some()
         && best != ctx.current_layout
         && !vetoed
-        && (forced || (len >= cfg.min_switch_len && confidence > cfg.threshold(len)));
+        && (forced
+            || (len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok));
 
     Decision {
         best,
@@ -229,6 +266,66 @@ mod tests {
             .collect()
     }
 
+    // --- Профілі для регресій коротких код-токенів --------------------------
+    // Відтворюють реальні FP калібрування (`fn`→«ат», `ls`→«ді`): двосимвольний
+    // англ. код-токен випадково збігається з коротким словом у uk-словнику, але
+    // мовна модель за uk-кандидата НЕ голосує. Контролюємо і словник, і LM.
+    fn en_code_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x21, KeyCap::letter('f', 'F')),
+                (0x31, KeyCap::letter('n', 'N')),
+                (0x26, KeyCap::letter('l', 'L')),
+                (0x1F, KeyCap::letter('s', 'S')),
+                (0x16, KeyCap::letter('u', 'U')),
+                (0x24, KeyCap::letter('j', 'J')),
+            ],
+        );
+        // Англ. корпус/словник без коротких токенів fn/ls/uj.
+        let lm = NgramModel::train("function list please value name return", 3, 0.5);
+        let dict =
+            Dictionary::from_words(["function", "list", "please", "value", "name", "return"])
+                .unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+        }
+    }
+
+    fn uk_short_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x21, KeyCap::letter('а', 'А')),
+                (0x31, KeyCap::letter('т', 'Т')),
+                (0x26, KeyCap::letter('д', 'Д')),
+                (0x1F, KeyCap::letter('і', 'І')),
+                (0x16, KeyCap::letter('т', 'Т')),
+                (0x24, KeyCap::letter('о', 'О')),
+            ],
+        );
+        // «то» — часте плинне слово (сильна LM); «ат`/«ді» — у словнику, але як
+        // слова в корпусі не трапляються (слабка LM) → патерн реальних FP.
+        // «то» — дуже часте плинне слово (сильна LM). «ат`/«ді» теж присутні, але
+        // рідко → LM за них голосує лише ледь-ледь (мала, але >0 перевага), як у
+        // реальних FP: повний бал (з dict_bonus) пробиває поріг, а LM — ні.
+        let lm = NgramModel::train(
+            "то це то воно то так то добре то знову то усе то напевно то ат ді",
+            3,
+            0.5,
+        );
+        let dict = Dictionary::from_words(["ат", "ді", "то"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+        }
+    }
+
     use crate::{ExclusionRules, WordRules};
 
     static NO_EXCL: ExclusionRules = ExclusionRules::new();
@@ -240,6 +337,21 @@ mod tests {
             current_layout: LayoutId::new(current),
             languages: langs,
             config: DetectorConfig::default(),
+            exclusions: &NO_EXCL,
+            rules: &NO_RULES,
+        }
+    }
+
+    fn ctx_with_config<'a>(
+        langs: &'a [LanguageProfile],
+        current: &str,
+        config: DetectorConfig,
+    ) -> Context<'a> {
+        Context {
+            active_window: Default::default(),
+            current_layout: LayoutId::new(current),
+            languages: langs,
+            config,
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
         }
@@ -343,5 +455,86 @@ mod tests {
         let d = decide(&strokes(&[0x22]), &ctx);
         assert_eq!(d.best, LayoutId::new("uk"));
         assert!(d.switch, "force має перемкнути попри min length");
+    }
+
+    // --- Калібрування порогу: короткий збіг у словнику без підтримки LM -------
+
+    #[test]
+    fn short_code_token_fn_does_not_switch_on_lone_dict_hit() {
+        // `fn` (en, код) → uk «ат» є у словнику, але LM за неї не голосує.
+        // Регресія реального FP калібрування: dict_bonus сам не має перемикати.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let token = strokes(&[0x21, 0x31]); // en "fn" / uk "ат"
+
+        // Контроль причинності: БЕЗ LM-guard (short_word_max_len=0 → коротким
+        // словам особлива вимога не ставиться) повний бал з dict_bonus пробиває
+        // поріг і перемикає — це і був FP.
+        let no_guard = DetectorConfig {
+            short_word_max_len: 0,
+            ..DetectorConfig::default()
+        };
+        let d_old = decide(&token, &ctx_with_config(&langs, "en", no_guard));
+        assert_eq!(d_old.current_text, "fn");
+        assert_eq!(
+            d_old.best_text, "ат",
+            "детектор бачить uk-кандидата зі словника"
+        );
+        assert!(
+            d_old.switch,
+            "без guard короткий збіг у словнику перемикав — це й був FP (conf={})",
+            d_old.confidence
+        );
+
+        // З дефолтним guard саме LM-вимога блокує перемикання → precision збережено.
+        let d = decide(&token, &ctx_with(&langs, "en"));
+        assert!(
+            !d.switch,
+            "короткий код-токен не перемикати без підтримки LM (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn short_code_token_ls_does_not_switch_on_lone_dict_hit() {
+        // `ls` (en, код) → uk «ді`: другий реальний FP калібрування.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let token = strokes(&[0x26, 0x1F]); // en "ls" / uk "ді"
+
+        let no_guard = DetectorConfig {
+            short_word_max_len: 0,
+            ..DetectorConfig::default()
+        };
+        let d_old = decide(&token, &ctx_with_config(&langs, "en", no_guard));
+        assert_eq!(d_old.current_text, "ls");
+        assert_eq!(d_old.best_text, "ді");
+        assert!(
+            d_old.switch,
+            "без guard `ls` перемикав на «ді» — це й був FP (conf={})",
+            d_old.confidence
+        );
+
+        let d = decide(&token, &ctx_with(&langs, "en"));
+        assert!(
+            !d.switch,
+            "короткий код-токен `ls` не перемикати (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn short_word_with_lm_support_still_switches() {
+        // Позитивний контроль: двосимвольне «то» (сильна LM + словник) — за нього
+        // голосує і модель, не лише словник → коротке слово ВСЕ ОДНО перемикається.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x16, 0x24]), &ctx); // en "uj" / uk "то"
+        assert_eq!(d.current_text, "uj");
+        assert_eq!(d.best, LayoutId::new("uk"));
+        assert_eq!(d.best_text, "то");
+        assert!(
+            d.switch,
+            "коротке слово з підтримкою LM має перемкнутися (conf={})",
+            d.confidence
+        );
     }
 }

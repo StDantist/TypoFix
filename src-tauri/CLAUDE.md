@@ -103,9 +103,21 @@ npm --prefix ui install
   **корінь** `data/`; функція сама додає піддиректорії: `load_layout`←`data/layouts`,
   `load_lm`←`data/lm`, `load_dict`←`data/dicts` (типове `{lang}.{toml,bin,fst}`).
   Відсутній файл → fallback на вбудований зразок.
-- **Реальні моделі через env `TYPOFIX_DATA_DIR`** (`resolved_data_dir()`): якщо вказує
-  на наявну теку — вантажимо справжні `.bin`/`.fst`; інакше зразки (слабші, ~46%).
-  `sync_runtime` передає це у рушій. У проді шлях даватиме інсталяція (ресурси) — TODO.
+- **Резолв data-dir (standalone, БЕЗ env)** — `lib.rs::resolve_data_dir(app)`. Щоб
+  застосунок працював подвійним кліком, шукаємо корінь `data/` за пріоритетом:
+  1. `TYPOFIX_DATA_DIR` (`resolved_data_dir()`) — явний override (dev/демо/`live_engine`);
+  2. `resource_dir()/data` — ресурси бандла (`cargo tauri build`; `bundle.resources`
+     у `tauri.conf.json` мапить `../data/{layouts,lm,dicts}`→`data/...`);
+  3. `data` поряд з `.exe` і **вгору по предках** шляху — портативний zip і dev
+     release-білд (`cargo build --release`: exe у `src-tauri/target/release/`, предок-
+     репо містить `data/` → подвійний клік працює БЕЗ копіювання).
+  Кандидата немає → вбудовані зразки (слабші, ~46%). Готча: `cargo build --release`
+  НЕ копіює `bundle.resources` (це робить лише `tauri build`) — тому й потрібен
+  ancestor-walk. Валідність кандидата = наявність піддиректорії `layouts/`
+  (`runtime::data_dir_is_valid`), щоб не схопити чужу теку `data`.
+- `find_data_dir`/`data_dir_is_valid` у `runtime.rs` — чисті (лише перевірка
+  існування), тестовні; складання списку кандидатів (env/resource/exe) — у `lib.rs`,
+  бо потребує `AppHandle`. `live_engine` лишається на env-only `resolved_data_dir()`.
 
 ## Демо-бінар `src/bin/live_engine.rs` (жива перевірка без GUI)
 Окремий бінар: реальні моделі (`TYPOFIX_DATA_DIR`) → `WindowsPlatform` (хуки) →

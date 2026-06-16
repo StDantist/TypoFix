@@ -32,6 +32,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../data/layouts": "data/layouts",
+      "../data/lm": "data/lm",
+      "../data/dicts": "data/dicts"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

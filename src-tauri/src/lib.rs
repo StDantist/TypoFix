@@ -100,6 +100,38 @@ fn build_tray_menu(app: &AppHandle, enabled: bool) -> tauri::Result<Menu<Wry>> {
     )
 }
 
+/// Знайти корінь каталогу даних (`layouts/`, `lm/`, `dicts/`) для standalone-запуску,
+/// щоб застосунок працював подвійним кліком БЕЗ `TYPOFIX_DATA_DIR`. Порядок кандидатів
+/// = пріоритет:
+/// 1. `TYPOFIX_DATA_DIR` — явний override (dev/демо).
+/// 2. `resource_dir()/data` — ресурси бандла (`cargo tauri build`, `bundle.resources`).
+/// 3. `data` поряд з `.exe` + у предків шляху — портативний режим і dev-білд
+///    `cargo build --release` (exe у `src-tauri/target/release/` → предок-репо має `data/`).
+///
+/// Жодного кандидата → `None` → вбудовані зразки (працює «з коробки», але слабше).
+fn resolve_data_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    // 1) Явний env-override має найвищий пріоритет.
+    if let Some(dir) = runtime::resolved_data_dir() {
+        return Some(dir);
+    }
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    // 2) Ресурси бандла (Tauri копіює сюди `data/` при `tauri build`).
+    if let Ok(res) = app.path().resource_dir() {
+        candidates.push(res.join("data"));
+    }
+
+    // 3) Поряд з .exe і вгору по предках (портативний zip / dev release-білд).
+    if let Ok(exe) = std::env::current_exe() {
+        for ancestor in exe.ancestors().skip(1) {
+            candidates.push(ancestor.join("data"));
+        }
+    }
+
+    runtime::find_data_dir(candidates)
+}
+
 /// Привести рантайм-цикл рушія у відповідність до налаштувань (старт/стоп/рестарт).
 /// Помилки не валять застосунок — лише лог; GUI лишається живим.
 fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
@@ -112,8 +144,8 @@ fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
     };
     let manager = app.state::<Mutex<RuntimeManager>>();
     let mut guard = manager.lock().expect("RuntimeManager отруєно");
-    // Реальні моделі з TYPOFIX_DATA_DIR, якщо задано; інакше вбудовані зразки.
-    let data_dir = runtime::resolved_data_dir();
+    // Самостійний пошук моделей (env → ресурси бандла → поряд з .exe); інакше зразки.
+    let data_dir = resolve_data_dir(app);
     if let Err(err) = guard.apply(settings, learned_path, data_dir) {
         eprintln!("TypoFix: рушій не стартував: {err}");
     }

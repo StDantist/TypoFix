@@ -111,11 +111,28 @@ pub fn load_language_profiles(
 
 /// Каталог даних для override-моделей: змінна `TYPOFIX_DATA_DIR`, якщо вказує на
 /// наявну теку. Інакше `None` → вбудовані зразки. (Зручно для демо/розробки;
-/// у проді шлях даватиме інсталяція через ресурси.)
+/// у проді шлях резолвить GUI — див. [`find_data_dir`].)
 pub fn resolved_data_dir() -> Option<PathBuf> {
     let raw = std::env::var_os("TYPOFIX_DATA_DIR")?;
     let dir = PathBuf::from(raw);
     dir.is_dir().then_some(dir)
+}
+
+/// Чи виглядає `dir` як корінь каталогу даних? Критерій — є піддиректорія
+/// `layouts/` (її завжди очікує [`load_language_profiles`]). Захищає від випадку,
+/// коли поряд з `.exe` лежить чужа тека `data` без наших моделей.
+pub fn data_dir_is_valid(dir: &Path) -> bool {
+    dir.join("layouts").is_dir()
+}
+
+/// Знайти корінь каталогу даних серед кандидатів (порядок = пріоритет).
+/// Повертає перший, що проходить [`data_dir_is_valid`]; інакше `None`
+/// (→ вбудовані зразки). Чисте: жодного IO крім перевірки існування.
+pub fn find_data_dir<I>(candidates: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    candidates.into_iter().find(|d| data_dir_is_valid(d))
 }
 
 // ===========================================================================

@@ -107,7 +107,6 @@
   let settings = $state(defaultSettings());
   /** Останній збережений знімок — база для визначення «брудних» змін. */
   let baseline = $state(JSON.stringify(defaultSettings()));
-  let processInput = $state("");
   let alwaysWordInput = $state("");
   let neverWordInput = $state("");
   /** Чи показано модалку-пікер запущених процесів. */
@@ -284,11 +283,6 @@
     if (v && !list.includes(v)) list.push(v);
   }
 
-  function addProcess() {
-    addUnique(settings.exclusions.process_names, processInput);
-    processInput = "";
-  }
-
   async function addExe() {
     const path = await pickExe();
     if (path) addUnique(settings.exclusions.exe_paths, path);
@@ -428,22 +422,6 @@
     <p class="desc">{$t("section.exclusions.desc")}</p>
 
     <div class="add-controls">
-      <form
-        class="add-process"
-        onsubmit={(e) => {
-          e.preventDefault();
-          addProcess();
-        }}
-      >
-        <input
-          type="text"
-          bind:value={processInput}
-          placeholder={$t("exclusions.process.placeholder")}
-        />
-        <button type="submit" disabled={!processInput.trim()}>
-          {$t("exclusions.add.process")}
-        </button>
-      </form>
       <button type="button" onclick={() => (showProcessPicker = true)}>
         {$t("exclusions.add.fromRunning")}
       </button>

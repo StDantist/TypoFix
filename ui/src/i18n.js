@@ -36,8 +36,6 @@ const messages = {
     "exclusions.list.exe": "Файли (.exe)",
     "exclusions.list.folder": "Теки",
     "exclusions.empty": "Порожньо",
-    "exclusions.process.placeholder": "напр. game.exe",
-    "exclusions.add.process": "Додати процес",
     "exclusions.add.fromRunning": "Обрати із запущених…",
     "exclusions.add.exe": "Додати .exe…",
     "exclusions.add.folder": "Додати теку…",

@@ -330,6 +330,27 @@ recall на них без втрати precision, у `eval_branch` додано 
   числа ідентичні з фічею й без). Покриття — герметичні юніти `caps_*` у `detector`
   + E2E `tests/caps_correction.rs` (екран має слово з касою, межа тригерить корекцію).
 
+## Секретні (пароль) поля — заслінка `Context.secure` (приватність №4!)
+
+**Неочевидне.** `Context` несе `pub secure: bool` (постачає платформа через
+`Platform::is_secure_field`). За `secure==true` `engine::step` ПЕРШИМ ділом —
+ще до rejection-сигналу/виключень/detector — робить ПОВНИЙ bypass: НЕ буферить,
+НЕ перемикає, повертає `Vec::new()`. **На відміну від `is_window_excluded`, ще й
+СКИДАЄ буфер вікна** (`invalidate_window`) і гасить `pending_retype` — у пам'яті
+ядра не має лишитись нічого про набране в полі пароля (правило №4). Те саме в
+`force_switch_last` (ручна команда НЕ переважає приватність). Гейтувати в обох
+місцях, де формуються `Action`.
+- **Чому поле в `Context`, а не через `rules` (як short_service):** це per-крок
+  стан від ОС (як `active_window`/`current_layout`), не статичні правила. Ціна —
+  усі літеральні конструктори `Context` мусять його задати (`secure: false` у
+  тестах/eval/`detector`); свідомо прийнято.
+- **`secure=true` → стан ядра лишається порожнім** (буфер не накопичено) — стереже
+  `tests/secure_field.rs` (`EngineState::default()==state`); контроль причинності:
+  те саме слово при `secure=false` перемикається. Платформна детекція (нативний
+  `ES_PASSWORD`/`EM_GETPASSWORDCHAR` + UIA `IsPassword` для веб/Electron/WPF, кеш на
+  зміні фокуса) і її МЕЖІ (WinRAR v7 не виставляє семантику пароля ніде — недосяжний
+  стандартними API) — `crates/typofix-platform-windows/CLAUDE.md`.
+
 ## Готчі правил/виключень (Фаза 4)
 
 - **Порядок: bypass → veto.** `engine::step` СПЕРШУ перевіряє виключення вікна

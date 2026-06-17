@@ -69,6 +69,11 @@ pub struct Context<'a> {
     pub exclusions: &'a ExclusionRules,
     /// Правила рівня слова (veto/force).
     pub rules: &'a WordRules,
+    /// Чи активне фокусне поле — **секретне** (пароль). Приватність №4: за `true`
+    /// ядро взагалі не буферить і не перемикає (повний bypass, як виключення
+    /// вікна, але ще й скидає буфер). Постачає платформа через
+    /// [`Platform::is_secure_field`](typofix_platform::Platform::is_secure_field).
+    pub secure: bool,
 }
 
 impl Context<'_> {
@@ -119,6 +124,7 @@ mod tests {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         }
     }
 

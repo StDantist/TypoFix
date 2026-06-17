@@ -46,6 +46,7 @@ fn drive_state(platform: &mut VirtualPlatform, state: &mut EngineState, langs: &
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         };
         step(state, ev, &ctx)
     });
@@ -61,6 +62,7 @@ fn ctx_from<'a>(platform: &VirtualPlatform, langs: &'a [LanguageProfile]) -> Con
         config: DetectorConfig::default(),
         exclusions: &NO_EXCL,
         rules: &NO_RULES,
+        secure: false,
     }
 }
 
@@ -301,6 +303,7 @@ fn force_switch_in_excluded_window_is_noop() {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL, // буфер наповнюємо без виключення
             rules: &NO_RULES,
+            secure: false,
         };
         step(&mut state, ev, &ctx)
     });
@@ -312,6 +315,7 @@ fn force_switch_in_excluded_window_is_noop() {
         config: DetectorConfig::default(),
         exclusions: &excl, // тепер вікно виключене
         rules: &NO_RULES,
+        secure: false,
     };
     assert!(
         force_switch_last(&mut state, &ctx).is_empty(),

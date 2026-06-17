@@ -54,6 +54,7 @@ fn ctx<'a>(langs: &'a [LanguageProfile], current: &str) -> Context<'a> {
         config: DetectorConfig::default(),
         exclusions: &NO_EXCL,
         rules: &NO_RULES,
+        secure: false,
     }
 }
 

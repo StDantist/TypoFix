@@ -23,6 +23,8 @@ mod inject;
 #[cfg(windows)]
 mod layout;
 #[cfg(windows)]
+mod secure;
+#[cfg(windows)]
 mod selection;
 #[cfg(windows)]
 mod window;
@@ -39,9 +41,11 @@ pub use layout::{
     MethodResult,
 };
 #[cfg(windows)]
+pub use secure::debug_uia_focus_is_password;
+#[cfg(windows)]
 pub use selection::get_selection_text;
 #[cfg(windows)]
-pub use window::foreground_window_info;
+pub use window::{foreground_focus_is_secure, foreground_window_info};
 
 #[cfg(not(windows))]
 pub use stub::{installed_layouts, InstalledLayout, WindowsPlatform};
@@ -113,6 +117,14 @@ mod windows_impl {
 
         fn current_layout(&self) -> LayoutId {
             layout::current_layout_id()
+        }
+
+        fn is_secure_field(&self) -> bool {
+            // Hot-path: лише читаємо кеш (дешево, без блокувань). Перерахунок
+            // (нативна перевірка + UIA) робить хук-потік на зміні фокуса —
+            // див. `secure`/`hook`. Покриває нативні ES_PASSWORD/passwordchar
+            // поля + UIA IsPassword (WinRAR-combo, веб/Electron).
+            crate::secure::cached_is_secure()
         }
     }
 }

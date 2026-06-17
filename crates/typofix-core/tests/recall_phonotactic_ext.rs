@@ -60,6 +60,7 @@ fn ctx<'a>(langs: &'a [LanguageProfile], current: &str, rules: &'a WordRules) ->
         config: DetectorConfig::default(),
         exclusions: &NO_EXCL,
         rules,
+        secure: false,
     }
 }
 

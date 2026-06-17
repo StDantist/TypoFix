@@ -60,6 +60,7 @@ fn run_with(
             config: DetectorConfig::default(),
             exclusions,
             rules: &NO_RULES,
+            secure: false,
         };
         step(&mut state, ev, &ctx)
     });
@@ -87,6 +88,7 @@ fn drive_state(platform: &mut VirtualPlatform, state: &mut EngineState, langs: &
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         };
         step(state, ev, &ctx)
     });

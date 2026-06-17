@@ -37,6 +37,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_Globalization",
+    # UI Automation (IsPassword) для секретних полів без нативного ES_PASSWORD
+    # (WinRAR-combo, веб/Electron): COM + VARIANT. Інтерфейси UIA сам windows-sys
+    # не дає — оголошуємо vtable вручну в `secure.rs` (крейт лишається на windows-sys).
+    "Win32_System_Com",
+    "Win32_System_Variant",
 ] }
 
 [lints]

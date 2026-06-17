@@ -37,6 +37,7 @@ fn run_engine(platform: &mut VirtualPlatform) {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         };
         step(&mut state, ev, &ctx)
     });

@@ -105,6 +105,7 @@ fn type_uk_word_in_en(langs: &[LanguageProfile], uk_word: &str) -> (String, Layo
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         };
         step(&mut state, e, &ctx)
     });

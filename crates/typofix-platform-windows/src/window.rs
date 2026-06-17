@@ -7,9 +7,19 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowThreadProcessId, SM_CXSCREEN,
-    SM_CYSCREEN,
+    GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
+    GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG,
+    SM_CXSCREEN, SM_CYSCREEN,
 };
+
+/// Біт стилю стандартного EDIT-контролу «текст приховано» (`ES_PASSWORD` із
+/// `WinUser.h`). `windows-sys` його не реекспортує, тож тримаємо константу тут.
+const ES_PASSWORD: isize = 0x0020;
+
+/// `EM_GETPASSWORDCHAR` (`WinUser.h`): повертає символ-маску EDIT-контролу або 0,
+/// якщо поле не маскує ввід. Ловить поля, що стали секретними через
+/// `EM_SETPASSWORDCHAR` у рантаймі (без біта `ES_PASSWORD` у стилі).
+const EM_GETPASSWORDCHAR: u32 = 0x00D2;
 
 /// `WindowInfo` для вікна на передньому плані. Якщо переднього вікна немає
 /// (напр. безголова сесія) — [`WindowInfo::default`].
@@ -91,9 +101,87 @@ fn is_window_fullscreen(hwnd: HWND) -> bool {
     }
 }
 
+/// Чи стиль вікна має біт `ES_PASSWORD` (текст приховано). Чисто й тестовно без
+/// WinAPI: парсинг `GWL_STYLE`, що повернув `GetWindowLongPtrW`.
+fn style_is_password(style: isize) -> bool {
+    (style & ES_PASSWORD) != 0
+}
+
+/// Чи EDIT-контрол `hwnd` маскує ввід через `EM_GETPASSWORDCHAR` (символ ≠ 0).
+/// Через `SendMessageTimeout` (короткий таймаут + `SMTO_ABORTIFHUNG`), бо це
+/// синхронний крос-процесний виклик — не блокуємо рушій, якщо ціль зависла.
+fn focus_has_password_char(hwnd: HWND) -> bool {
+    unsafe {
+        let mut result: usize = 0;
+        let ok = SendMessageTimeoutW(
+            hwnd,
+            EM_GETPASSWORDCHAR,
+            0,
+            0,
+            SMTO_ABORTIFHUNG,
+            40,
+            &mut result,
+        );
+        ok != 0 && result != 0
+    }
+}
+
+/// Справжнє фокусне вікно (контрол) переднього плану, якщо є.
+///
+/// `GetForegroundWindow` → його GUI-потік (`GetWindowThreadProcessId`) →
+/// `GetGUIThreadInfo(thread).hwndFocus` (працює навіть усередині UWP-хоста — той
+/// самий M2-метод, що в `layout.rs`). `None`, якщо вікна/фокуса немає.
+pub(crate) fn foreground_focus_hwnd() -> Option<HWND> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.is_null() {
+            return None;
+        }
+        let fg_tid = GetWindowThreadProcessId(fg, std::ptr::null_mut());
+        if fg_tid == 0 {
+            return None;
+        }
+        let mut gti: GUITHREADINFO = std::mem::zeroed();
+        gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        if GetGUIThreadInfo(fg_tid, &mut gti) == 0 || gti.hwndFocus.is_null() {
+            return None;
+        }
+        Some(gti.hwndFocus)
+    }
+}
+
+/// **Нативна** (дешева, без COM) перевірка секретності контрола: `ES_PASSWORD` у
+/// `GWL_STYLE` **АБО** маскування вводу (`EM_GETPASSWORDCHAR` ≠ 0; ловить поля з
+/// пароль-символом, виставленим у рантаймі без біта стилю — інсталятори, логіни).
+pub(crate) fn native_focus_is_secure(hwnd: HWND) -> bool {
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
+    style_is_password(style) || focus_has_password_char(hwnd)
+}
+
+/// **Лише нативна** жива перевірка секретності фокусного поля переднього плану
+/// (`ES_PASSWORD`/passwordchar). НЕ використовує UIA, НЕ блокує (для прямих
+/// запитів/прикладів). Продакшн-шлях кешує результат (нативна + UIA) на зміні
+/// фокуса — див. [`crate::secure`]. Невдача → `false`.
+pub fn foreground_focus_is_secure() -> bool {
+    foreground_focus_hwnd()
+        .map(native_focus_is_secure)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn password_style_bit_is_parsed() {
+        // ES_PASSWORD виставлено → секретне.
+        assert!(style_is_password(0x0020));
+        // Типовий EDIT-стиль із ES_PASSWORD серед інших бітів (WS_CHILD|WS_VISIBLE|…).
+        assert!(style_is_password(0x50800020u32 as i32 as isize));
+        // Без біта → не секретне (звичайне поле / ALL інші стилі).
+        assert!(!style_is_password(0x0000));
+        assert!(!style_is_password(0x50800000u32 as i32 as isize));
+    }
 
     #[test]
     fn process_name_extraction() {

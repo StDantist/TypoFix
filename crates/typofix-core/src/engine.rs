@@ -183,13 +183,23 @@ fn build_pending(
 
 /// Внутрішня реалізація кроку (див. [`crate::step`]).
 pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Action> {
+    let wkey = window_key(&ctx.active_window);
+
+    // Приватність №4: секретне (пароль) поле — повний bypass ПЕРШИМ ділом, ще
+    // до rejection-сигналу/detector. НЕ буферимо й НЕ перемикаємо, а буфер вікна
+    // СКИДАЄМО (на відміну від виключення вікна) — у пам'яті не має лишитись
+    // нічого про набране в полі пароля. `pending_retype` теж гасимо.
+    if ctx.secure {
+        state.buffers.invalidate_window(&wkey);
+        state.pending_retype = None;
+        return Vec::new();
+    }
+
     // Виключене вікно (застосунок/папка) — повний bypass: не буферимо й не
     // перемикаємо. Перевіряємо ПЕРЕД detector (порядок: bypass → veto).
     if ctx.is_window_excluded() {
         return Vec::new();
     }
-
-    let wkey = window_key(&ctx.active_window);
 
     // Самонавчання: чи це відкидання щойно зробленого перенабору?
     if let Some(pending) = state.pending_retype.as_ref() {
@@ -293,11 +303,18 @@ pub fn revert_last(state: &mut EngineState) -> Vec<Action> {
 /// профілю чи іншої мови — порожній план. Залишає `pending_retype`, тож ручне
 /// перемикання теж можна відкотити через [`revert_last`].
 pub fn force_switch_last(state: &mut EngineState, ctx: &Context) -> Vec<Action> {
+    let wkey = window_key(&ctx.active_window);
+    // Приватність №4: секретне поле — повний bypass + скидання буфера (як у `step`).
+    // Ручна команда НЕ переважає приватність: у полі пароля нічого не робимо.
+    if ctx.secure {
+        state.buffers.invalidate_window(&wkey);
+        state.pending_retype = None;
+        return Vec::new();
+    }
     // Виключене вікно — повний bypass (як у `step`).
     if ctx.is_window_excluded() {
         return Vec::new();
     }
-    let wkey = window_key(&ctx.active_window);
     let strokes: Vec<KeyStroke> = state.buffers.for_window(&wkey).strokes().to_vec();
     if strokes.is_empty() {
         return Vec::new();

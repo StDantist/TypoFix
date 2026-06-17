@@ -173,9 +173,54 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
   Notepad. Чистка між кейсами — Ctrl+A+Delete; розкладка ОС виставляється
   `SwitchLayout`+поллінг `current_layout_id`.
 
-## Приватність / follow-up
+## Приватність / детекція секретних полів (правило №4) — `secure.rs` + `hook.rs`
 - Натиски лише в RAM (канал mpsc), нічого на диск (правило №4).
-- Password/secure-поля поки **не** детектуються (буферити їх не можна) — потрібен
-  follow-up: UI Automation / `GetGUIThreadInfo`+`ES_PASSWORD`. Зараз структурно
-  не позначаємо; це свідома прогалина, не забути перед релізом.
+- **Архітектура — КЕШ НА ЗМІНІ ФОКУСА (hot-path!).** `Platform::is_secure_field()`
+  кличеться ЩОКРОКУ (на кожне натискання) → там НЕ можна робити
+  `SendMessageTimeout`/UIA(COM). Тому секретність рахується РАЗ на зміну фокуса й
+  кешується (`secure::CACHE: AtomicBool`); `is_secure_field` лише читає атомік
+  (`secure::cached_is_secure`, без блокувань). Перерахунок (`secure::recompute`)
+  висить на WinEvent-хуках у `hook.rs`: **`EVENT_SYSTEM_FOREGROUND`** (зміна вікна —
+  поряд із емісією `FocusChange`) + **`EVENT_OBJECT_FOCUS`** (зміна фокуса МІЖ
+  контролами в межах вікна, напр. Tab у поле пароля). Перерахунок іде на хук-потоці
+  (там є message-pump → STA для COM).
+- **Дворівнева детекція (у `recompute`, порядок = вартість):**
+  1. **Нативна** (`window::native_focus_is_secure`, дешево, без COM): фокусний
+     контрол (`window::foreground_focus_hwnd` = `GetForegroundWindow`→
+     `GetGUIThreadInfo.hwndFocus`, M2-метод як у `layout.rs`) має **`ES_PASSWORD`** у
+     `GWL_STYLE` АБО маскує ввід (**`EM_GETPASSWORDCHAR`≠0** через `SendMessageTimeoutW`,
+     40мс+`SMTO_ABORTIFHUNG`). Ловить нативні Win32-edit (логіни, інсталятори).
+  2. Якщо `false` → **UI Automation** (`secure::uia_focus_is_password`):
+     `IUIAutomation::GetFocusedElement` → `UIA_IsPasswordPropertyId`. **`GetFocusedElement`,
+     а не `ElementFromHandle(hwndFocus)`** — бо фокус буває на WINDOWLESS-елементі
+     (веб-`<input type=password>`, WPF/XAML/Electron) усередині одного render-HWND,
+     якого ElementFromHandle не дістав би. Ловить **веб/Electron** (підтверджено).
+  - Ядро (`Context.secure`) за `true` робить ПОВНИЙ bypass + скидає буфер
+    (`typofix-core/CLAUDE.md`).
+- **COM/UIA на windows-sys (крейт НЕ тягне `windows`).** windows-sys 0.59 дає лише
+  константи (`CUIAutomation`, `UIA_IsPasswordPropertyId`), але НЕ інтерфейси UIA →
+  vtable `IUIAutomation`(GetFocusedElement, слот 8)/`IUIAutomationElement`
+  (GetCurrentPropertyValue, слот 10) **оголошено вручну** в `secure.rs` (заглушки на
+  невикористані слоти). IID `IUIAutomation` теж локально. `CoInitializeEx(STA)` раз на
+  хук-потоці (`com_init`), `CUIAutomation` лінивий у `thread_local`, `Release`/
+  `CoUninitialize` при зупинці (`com_shutdown`). Фічі windows-sys: `Win32_System_Com` +
+  `Win32_System_Variant` (VARIANT/VT_BOOL). `EM_GETPASSWORDCHAR`=0x00D2, `ES_PASSWORD`=
+  0x0020 — локальні (sys не дає).
+- **ЖИВО ПІДТВЕРДЖЕНО (фактичні результати):**
+  - ✅ Нативний `ES_PASSWORD`-edit → native+UIA TRUE; звичайний → false
+    (`examples/secure_synth.rs`, exit 0 — доказ плумбінгу обох шляхів).
+  - ✅ **Веб** (`<input type=password>` у Firefox) → `is_secure_field()`=**TRUE** через UIA.
+  - ✅ Notepad (звичайне поле) → false (регрес).
+- 🔴 **ТВЕРДА МЕЖА — WinRAR v7 НЕ детектується (жодним шляхом).** Перевірено живцем
+  (вкл. .NET UIA: `FromHandle(focus).IsPassword=False` І пошук по піддереву → **жодного
+  IsPassword-елемента**): фокусне поле — кастомний edit (UIA бачить як `Pane`), без
+  `ES_PASSWORD`, без passwordchar, **без UIA IsPassword** (маскування суто owner-draw).
+  Тобто WinRAR v7 не виставляє семантику пароля НІДЕ → стандартними API недосяжний.
+  Початкове припущення «WinRAR=ES_PASSWORD» і «UIA закриє combo» для цієї версії
+  **не справдились**. Закрити можна лише process/dialog-евристикою (клас `#32770` +
+  заголовок «пароль» + `winrar.exe`) — крихко/локалізовано, **за рішенням власника**.
+- **Інші непокриті:** поля, що взагалі не виставляють ні нативної, ні UIA-семантики
+  пароля (як WinRAR). Можлива оптимізація: UIA на КОЖЕН `EVENT_OBJECT_FOCUS` будує
+  accessibility-дерево браузера (вмикає a11y) — прийнятно (фокус-події рідкі), але
+  якщо стане критично — кешувати/фільтрувати клас контрола перед UIA.
 - `is_fullscreen` — best-effort, лише первинний монітор (follow-up: `MonitorFromWindow`).

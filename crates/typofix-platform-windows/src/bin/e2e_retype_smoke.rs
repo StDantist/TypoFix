@@ -263,6 +263,7 @@ mod win {
                 config: DetectorConfig::default(),
                 exclusions: &excl,
                 rules: &rules,
+                secure: false,
             };
             let t0 = Instant::now();
             let out = step(&mut state, ev, &ctx);

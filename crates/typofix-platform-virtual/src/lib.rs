@@ -37,6 +37,9 @@ pub struct VirtualPlatform {
     events: VecDeque<InputEvent>,
     /// Журнал застосованих дій — зручно для перевірок плумбінгу в тестах.
     applied: Vec<Action>,
+    /// Чи поточне фокусне поле «секретне» (пароль) — для тесту приватності №4
+    /// без реальної ОС. Повертається з [`Platform::is_secure_field`].
+    secure: bool,
 }
 
 impl Default for VirtualPlatform {
@@ -48,6 +51,7 @@ impl Default for VirtualPlatform {
             layout: LayoutId::new("en"),
             events: VecDeque::new(),
             applied: Vec::new(),
+            secure: false,
         }
     }
 }
@@ -81,6 +85,12 @@ impl VirtualPlatform {
     /// Задати поточну розкладку напряму (поза [`Action::SwitchLayout`]).
     pub fn set_layout(&mut self, layout: LayoutId) {
         self.layout = layout;
+    }
+
+    /// Позначити поточне фокусне поле «секретним» (пароль) — для тесту, що ядро
+    /// у такому полі не буферить і не перемикає (приватність №4).
+    pub fn set_secure(&mut self, secure: bool) {
+        self.secure = secure;
     }
 
     /// Попередньо заповнити текст і поставити курсор у кінець (зручно для
@@ -157,6 +167,10 @@ impl Platform for VirtualPlatform {
 
     fn current_layout(&self) -> LayoutId {
         self.layout.clone()
+    }
+
+    fn is_secure_field(&self) -> bool {
+        self.secure
     }
 }
 

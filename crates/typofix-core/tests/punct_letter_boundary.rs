@@ -125,6 +125,7 @@ fn run(platform: &mut VirtualPlatform, langs: &[LanguageProfile]) {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         };
         step(&mut state, ev, &ctx)
     });

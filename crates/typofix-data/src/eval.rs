@@ -336,6 +336,7 @@ pub fn evaluate(
             config,
             exclusions: &exclusions,
             rules,
+            secure: false,
         };
         let decision = detector::decide(&strokes, &ctx);
 

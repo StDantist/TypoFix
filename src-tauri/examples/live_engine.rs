@@ -139,6 +139,8 @@ fn main() {
             config,
             exclusions: &exclusions,
             rules: &rules,
+            // Демо-харнес без детекції секретних полів — звичайний режим.
+            secure: false,
         };
 
         // --- Діагностичне логування події ---

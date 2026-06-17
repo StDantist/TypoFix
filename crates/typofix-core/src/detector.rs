@@ -972,6 +972,7 @@ mod tests {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         }
     }
 
@@ -987,6 +988,7 @@ mod tests {
             config,
             exclusions: &NO_EXCL,
             rules: &NO_RULES,
+            secure: false,
         }
     }
 
@@ -1002,6 +1004,7 @@ mod tests {
             config: DetectorConfig::default(),
             exclusions: &NO_EXCL,
             rules,
+            secure: false,
         }
     }
 
@@ -2108,6 +2111,7 @@ mod tests {
             config: cfg,
             exclusions: &NO_EXCL,
             rules: &rules,
+            secure: false,
         };
         let d = decide(&strokes(&EURUSD), &ctx);
         assert_eq!(d.current_text, "угкгів");
@@ -2284,6 +2288,7 @@ mod tests {
             config: cfg,
             exclusions: &NO_EXCL,
             rules: &rules,
+            secure: false,
         };
         let d = decide(&strokes(&[0x14, 0x2D, 0x14]), &ctx);
         assert!(

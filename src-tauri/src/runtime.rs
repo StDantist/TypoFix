@@ -562,6 +562,7 @@ fn engine_loop(
                     config,
                     exclusions: &exclusions,
                     rules: &rules,
+                    secure: platform.is_secure_field(),
                 };
                 let actions = force_switch_last(&mut state, &ctx);
                 apply_actions(&mut platform, &actions);
@@ -603,6 +604,8 @@ fn engine_loop(
             config,
             exclusions: &exclusions,
             rules: &rules,
+            // Приватність №4: пароль-поле → ядро не буферить/не перемикає.
+            secure: platform.is_secure_field(),
         };
 
         let actions = step(&mut state, event, &ctx);

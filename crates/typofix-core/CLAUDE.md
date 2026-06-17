@@ -230,6 +230,19 @@ recall на них без втрати precision, у `eval_branch` додано 
   Стереже: юніти `mirror_*`/`mirror_does_not_switch_one_letter_service_word`/
   `lone_comma_*` (герметичні) + `tests/recall_short_service.rs::one_letter_tokens_never_switch`
   (реальні моделі+whitelist).
+- **⚠️ Часті 2-літерні укр. (`що`/`то`) на FALLBACK-зразках — потрібні У ДВОХ
+  місцях даних (репро власника «oj»→`що` не перемикалось).** Дзеркало вимагає І
+  `best_is_dict`, І `is_short_service`. На РЕАЛЬНИХ моделях `що`/`то` мають сильну
+  LM → перемикаються навіть стандартним шляхом (whitelist не критичний). Але коли
+  рантайм НЕ зрезолвив `data/` і впав на вбудовані зразки (`sample_*`, ~46%), слово
+  має бути І у зразковому словнику (`data/samples/uk.words.txt`), І у whitelist
+  (`data/dicts/uk.short.txt`) — інакше нема dict-hit + нема whitelist → conf нижче
+  порогу. `то` є в обох → працює; `що` НЕ було ні там, ні там → FN. **Фікс — суто
+  ДАНІ (зона Bruno), не логіка:** додати `що` в обидва файли (en-двійник `oj` — не
+  англ. слово → нуль FP). Поріг 2-літерних НЕ чіпати (відкрив би `of`/`it`/`is`).
+  Стереже `tests/recall_short_service.rs`: `que_and_to_switch_on_real_models`
+  (реальні, green) + `que_switches_on_embedded_fallback` (зразки, `#[ignore]` доки
+  дані не додано).
 
 ## Пунктуація-що-є-літерою-в-розкладці + дизамбігуація на межі (готча!)
 

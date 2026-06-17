@@ -111,6 +111,64 @@ fn two_letter_service_words_switch() {
     }
 }
 
+/// Зразкові (вбудовані) профілі — те, на що ДЕГРАДУЄ рантайм, коли реальний
+/// `data/` не зрезолвлено (`load_lm`/`load_dict` із `None` → `sample_*`). Завжди
+/// доступні (вшиті в крейт), тож тест герметичний.
+fn sample_profiles() -> Vec<LanguageProfile> {
+    ["uk", "en"]
+        .iter()
+        .map(|&lang| LanguageProfile {
+            id: LayoutId::new(lang),
+            layout: typofix_data::embedded_layout(lang).unwrap(),
+            lm: typofix_data::load_lm(lang, None).unwrap(),
+            dict: typofix_data::load_dict(lang, None).unwrap(),
+            freq: None,
+        })
+        .collect()
+}
+
+#[test]
+fn que_and_to_switch_on_real_models() {
+    // РЕПРО власника на РЕАЛЬНИХ моделях (locked-in вимога): «oj»(en)→«що»,
+    // «nj»(en)→«то». o→щ, j→о, n→т на ЙЦУКЕН. Обидва — дуже часті 2-літерні укр.
+    let Some(langs) = real_profiles() else {
+        eprintln!("SKIP: реальні моделі відсутні");
+        return;
+    };
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let uk = &langs[0].layout;
+    for w in ["що", "то"] {
+        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
+        assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
+            "'{w}' (репро) має перемкнутись (best={} '{}' conf={:.2})",
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}
+
+#[test]
+fn que_switches_on_embedded_fallback() {
+    // Найгірший реалістичний шлях: апка НЕ зрезолвила реальний data/ → вбудовані
+    // зразки. «то» (у зразках + whitelist) перемикається; «що» — ні (репро).
+    // Після додавання «що» у дані обидва мають перемикатися й тут.
+    let langs = sample_profiles();
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let uk = &langs[0].layout;
+    for w in ["що", "то"] {
+        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
+        assert!(
+            d.switch && d.best_text == w,
+            "'{w}' на зразках має перемкнутись (best={} '{}' conf={:.2})",
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}
+
 #[test]
 fn real_english_short_words_do_not_switch() {
     let Some(langs) = real_profiles() else {

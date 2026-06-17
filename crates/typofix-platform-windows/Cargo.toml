@@ -9,6 +9,21 @@ description = "Реалізація Platform для Windows (хук WH_KEYBOARD_
 [dependencies]
 typofix-platform.workspace = true
 
+# Опційні — лише для real-OS e2e-харнеса `e2e_retype_smoke` (bin за `required-features`).
+# Не тягнуться у звичайну збірку крейта (тримаємо платформний крейт чистим).
+typofix-core = { workspace = true, optional = true }
+typofix-data = { workspace = true, optional = true }
+
+[features]
+# Вмикає e2e-харнес (потребує ядра + лоадерів даних). Прод-збірка його не вмикає.
+e2e-harness = ["dep:typofix-core", "dep:typofix-data"]
+
+# Real-OS наскрізний харнес: реальні хуки → core::step → реальний перенабір у вікно.
+# Потребує feature (а отже core+data); звичайна `cargo build` його пропускає.
+[[bin]]
+name = "e2e_retype_smoke"
+required-features = ["e2e-harness"]
+
 # WinAPI лише на Windows-цілі; на інших ОС крейт компілюється як тонка заглушка
 # (щоб `cargo build --workspace` лишався зеленим у CI на Linux/macOS).
 [target.'cfg(windows)'.dependencies]

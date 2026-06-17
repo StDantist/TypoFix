@@ -249,6 +249,8 @@ dependencies = [
 name = "typofix-platform-windows"
 version = "0.1.0"
 dependencies = [
+ "typofix-core",
+ "typofix-data",
  "typofix-platform",
  "windows-sys",
 ]

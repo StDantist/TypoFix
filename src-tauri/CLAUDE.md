@@ -276,6 +276,31 @@ npm --prefix ui install
 - **`tauri dev` НЕ запускати** (ставить реальні хуки + інтерактив). Живий прогін —
   контрольовано, як зі спайком. Досить компіляції + тестів мапінгу.
 
+## Мовна пара (B6) — параметричний шлях `language` → движок
+**Стан:** повністю data-driven. Конфіг несе `language: LanguagePair` (enum, serde
+kebab-ключ `uk-en`). Єдина зв'язка «пара → мови» — **`LanguagePair::langs()`**
+(`config.rs`, поряд із варіантом enum) → `["uk","en"]`. `runtime::langs_for` —
+тонка обгортка над нею (БЕЗ власного захардкодженого uk/en). Лоадери
+(`load_language_profiles`/`load_word_rules`) лише ітерують `langs_for(pair)` і
+вантажать дані за рядком-мовою через `typofix-data` — мовно-агностичні. Движок
+(`step`/`Context.languages`) і платформний layout-switch (за PRIMARYLANGID серед
+ВСТАНОВЛЕНИХ розкладок) теж не знають конкретних мов. Зміна пари в UI → `save_settings`
+→ `sync_runtime` перезапускає движок із новими профілями.
+
+### ЧЕКЛИСТ: як додати мовну пару (напр. `pl-en`)
+1. **Дані** в `data/` для КОЖНОЇ мови пари (через наявні loader'и, крейти НЕ чіпати):
+   `layouts/{lang}.toml`, `lm/{lang}.bin`, `dicts/{lang}.fst` (+ опц.
+   `dicts/{lang}.freq.fst`, `dicts/{lang}.short.txt`, спільні `user.txt`/`iso4217.txt`/
+   `extensions.txt`). Відсутній файл → м'яка деградація на вбудований зразок.
+2. **Enum** у `config.rs`: варіант `PlEn` з `#[serde(rename = "pl-en")]` + його арм у
+   `LanguagePair::langs()` → `["pl","en"]`. (Обидва в одному файлі, поряд.)
+3. **UI** (`App.svelte`): `<option value="pl-en">{$t("language.pl-en")}</option>` +
+   i18n-рядок `language.pl-en` (`i18n.js`). За потреби онови `section.language.note`.
+4. **НІЧОГО з логіки не міняти:** ні лоадери, ні `engine`, ні платформу, ні
+   `sync_runtime`. Контракт перевіряє тест `language_pair_langs_matches_serde_key`
+   (мови = частини kebab-ключа). Реальні дані для другої мови — окремий датасет-проєкт;
+   фейкову мову НЕ додавати.
+
 ## Маппінг конфіг → ядро (`runtime.rs`, чисте, тестоване)
 - `exclusion_rules_from` → `core::ExclusionRules` (process/exe/folder; нормалізацію
   шляхів робить core).

@@ -85,11 +85,11 @@ pub fn detector_config_from(settings: &AppSettings) -> DetectorConfig {
     }
 }
 
-/// Ідентифікатори мов для пари (поки фіксовано uk↔en).
+/// Ідентифікатори мов для пари. Тонка обгортка над [`LanguagePair::langs`] —
+/// зв'язка «пара → мови» живе в одному місці (config.rs), поряд із варіантом enum,
+/// тож тут НЕМАЄ захардкодженого uk/en. Усі лоадери нижче ітерують саме це.
 pub fn langs_for(pair: LanguagePair) -> [&'static str; 2] {
-    match pair {
-        LanguagePair::UkEn => ["uk", "en"],
-    }
+    pair.langs()
 }
 
 /// Завантажити профілі мов (розкладка + LM + словник) для пари.

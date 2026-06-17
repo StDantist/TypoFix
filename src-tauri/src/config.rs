@@ -25,13 +25,32 @@ pub const SETTINGS_FILE: &str = "settings.json";
 /// відсутнє поле → дефолт через `serde(default)`).
 pub const SCHEMA_VERSION: u32 = 4;
 
-/// Мовна пара. Поки фіксовано uk↔en, але закладено в модель як enum.
+/// Мовна пара. Поки доступна лише uk↔en, але модель параметрична (enum) — щоб
+/// додати пару, треба ЛИШЕ дані + один варіант сюди (з його [`langs`](Self::langs)).
+///
+/// **Як додати мовну пару (єдине джерело істини для пари — тут):**
+/// (1) дані в `data/` (`layouts`/`lm`/`dicts`) для кожної мови пари;
+/// (2) варіант enum сюди з `#[serde(rename = "xx-yy")]` + його арм у
+/// [`langs`](Self::langs); (3) UI-опція + i18n-рядок `language.xx-yy`.
+/// Жодної ЛОГІКИ міняти не треба — лоадери/движок/платформа мовно-агностичні.
+/// Повний чеклист — `src-tauri/CLAUDE.md`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum LanguagePair {
     /// Українська ↔ англійська.
     #[default]
     #[serde(rename = "uk-en")]
     UkEn,
+}
+
+impl LanguagePair {
+    /// Ідентифікатори мов пари (як іменуються файли даних і `LayoutId`).
+    /// Єдина точка зв'язки «пара → мови»: лоадери (`runtime.rs`) ітерують саме це.
+    /// Додаєш варіант enum → додаєш сюди його `["xx", "yy"]`, і все нижче працює.
+    pub fn langs(self) -> [&'static str; 2] {
+        match self {
+            LanguagePair::UkEn => ["uk", "en"],
+        }
+    }
 }
 
 /// Списки виключень — дзеркало форми `core::ExclusionRules`.
@@ -389,6 +408,18 @@ mod tests {
     fn language_pair_serializes_as_kebab() {
         let json = serde_json::to_string(&LanguagePair::UkEn).unwrap();
         assert_eq!(json, "\"uk-en\"");
+    }
+
+    #[test]
+    fn language_pair_langs_matches_serde_key() {
+        // Контракт параметричності: мови пари = частини kebab-ключа (`uk-en`→[uk,en]).
+        // Тримає `langs()` синхронним із serde-rename для майбутніх пар.
+        let pair = LanguagePair::UkEn;
+        assert_eq!(pair.langs(), ["uk", "en"]);
+        let key = serde_json::to_string(&pair).unwrap();
+        let key = key.trim_matches('"');
+        let parts: Vec<&str> = key.split('-').collect();
+        assert_eq!(parts, pair.langs().to_vec());
     }
 
     #[test]

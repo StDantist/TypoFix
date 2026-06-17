@@ -304,6 +304,7 @@
     <select bind:value={settings.language}>
       <option value="uk-en">{$t("language.uk-en")}</option>
     </select>
+    <p class="hint lang-note">{$t("section.language.note")}</p>
   </section>
 
   <!-- Виключення -->
@@ -649,6 +650,10 @@
   .hint {
     color: var(--text-dim);
     font-size: 0.85rem;
+  }
+
+  .lang-note {
+    margin: 0.6rem 0 0;
   }
 
   select,

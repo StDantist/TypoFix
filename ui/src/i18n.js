@@ -22,6 +22,8 @@ const messages = {
     "section.language.title": "Мовна пара",
     "section.language.desc": "Між якими розкладками виправляти текст.",
     "language.uk-en": "Українська ⇄ Англійська",
+    "section.language.note":
+      "Поки доступна лише ця пара. Інші мови з'являться з додаванням словників (layout / LM / dict).",
 
     // Виключення (= повне вимкнення per-app: движок ПОВНІСТЮ обходить такі вікна)
     "section.exclusions.title": "Вимкнено для програм / папок",

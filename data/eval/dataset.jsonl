@@ -143,14 +143,6 @@
 {"text": "умутштп", "typed_layout": "uk", "intended_layout": "en", "should_switch": true, "category": "pos_uk_for_en"}
 {"text": "цуулутв", "typed_layout": "uk", "intended_layout": "en", "should_switch": true, "category": "pos_uk_for_en"}
 {"text": "цуферук", "typed_layout": "uk", "intended_layout": "en", "should_switch": true, "category": "pos_uk_for_en"}
-{"text": "f", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "d", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "p", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "q", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "s", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "j", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "e", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
-{"text": "z", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_1"}
 {"text": "db", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_2"}
 {"text": "uf", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_2"}
 {"text": "ut", "typed_layout": "en", "intended_layout": "uk", "should_switch": true, "category": "pos_short_uk_2"}
@@ -381,3 +373,11 @@
 {"text": "fg", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_twin_garbage"}
 {"text": "kl", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_twin_garbage"}
 {"text": "vn", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_twin_garbage"}
+{"text": "f", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "d", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "p", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "q", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "s", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "j", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "e", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}
+{"text": "z", "typed_layout": "en", "intended_layout": "en", "should_switch": false, "category": "short_single_legit"}

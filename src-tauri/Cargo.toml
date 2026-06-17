@@ -51,6 +51,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
+    # PlaySound (winmm) для звуку при перемиканні (B2).
+    "Win32_Media_Audio",
 ] }
 # PNG-кодування RGBA-буфера іконки (вже в дереві через tauri image-png — без дубля).
 image = { version = "0.25", default-features = false, features = ["png"] }

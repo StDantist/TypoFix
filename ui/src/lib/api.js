@@ -37,6 +37,9 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {boolean} phonotactics
  * @property {boolean} fix_capslock
  *
+ * @typedef {Object} Feedback
+ * @property {boolean} sound_on_switch
+ *
  * @typedef {Object} AppSettings
  * @property {number} version
  * @property {boolean} enabled
@@ -45,6 +48,7 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {Words} words
  * @property {Hotkeys} hotkeys
  * @property {Behavior} behavior
+ * @property {Feedback} feedback
  * @property {Detection} detection
  */
 

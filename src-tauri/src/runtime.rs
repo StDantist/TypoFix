@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use tauri::AppHandle;
 use typofix_core::{
     CaseMode, DetectorConfig, ExclusionRules, FrequencyMap, LanguageProfile, LayoutId, WordRules,
 };
@@ -260,6 +261,17 @@ pub fn append_learned(path: &Path, word: &str) -> std::io::Result<()> {
 // Менеджер рантайму: старт/стоп потоку рушія
 // ===========================================================================
 
+/// Чи означає набір дій РЕАЛЬНИЙ авто-перенабір (для звукового сигналу B2)?
+/// Справжнє виправлення = крок ядра видав І `SwitchLayout`, І `TypeUnicode` (саме
+/// перенабір), а не пропуск клавіші (`None`) чи самонавчання (`CommitException`).
+/// Чисте → тестовно без хука.
+pub fn is_real_switch(actions: &[typofix_core::Action]) -> bool {
+    use typofix_core::Action;
+    let has_switch = actions.iter().any(|a| matches!(a, Action::SwitchLayout(_)));
+    let has_type = actions.iter().any(|a| matches!(a, Action::TypeUnicode(_)));
+    has_switch && has_type
+}
+
 /// Команда від хоткей-хендлера (потік Tauri) до потоку рушія (B1).
 ///
 /// **Чому канал, а не прямий виклик:** рушій крутиться в ОКРЕМОМУ потоці
@@ -289,13 +301,14 @@ impl RuntimeManager {
     /// рушія з актуальним конфігом; пауза/вимкнено → зупинка.
     pub fn apply(
         &mut self,
+        app: &AppHandle,
         settings: &AppSettings,
         learned_path: PathBuf,
         data_dir: Option<PathBuf>,
     ) -> Result<(), String> {
         self.stop_engine();
         if settings.enabled {
-            self.start_engine(settings, learned_path, data_dir)?;
+            self.start_engine(app, settings, learned_path, data_dir)?;
         }
         Ok(())
     }
@@ -337,6 +350,7 @@ impl RuntimeManager {
     #[cfg(windows)]
     fn start_engine(
         &mut self,
+        app: &AppHandle,
         settings: &AppSettings,
         learned_path: PathBuf,
         data_dir: Option<PathBuf>,
@@ -348,6 +362,9 @@ impl RuntimeManager {
         // словник (user.txt ∪ always_switch) + veto (never_switch) + forex-коди.
         let rules = load_word_rules(settings.language, data_dir.as_deref(), &settings.words);
         let seed = load_learned(&learned_path);
+        // Прапорець звуку (B2) і клон AppHandle (для емісії зміни розкладки в трей).
+        let sound_on_switch = settings.feedback.sound_on_switch;
+        let app_for_thread = app.clone();
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
@@ -357,6 +374,7 @@ impl RuntimeManager {
             .name("typofix-engine".to_string())
             .spawn(move || {
                 engine_loop(
+                    app_for_thread,
                     stop_for_thread,
                     cmd_rx,
                     exclusions,
@@ -365,6 +383,7 @@ impl RuntimeManager {
                     rules,
                     seed,
                     learned_path,
+                    sound_on_switch,
                 );
             })
             .map_err(|e| format!("не вдалося запустити потік рушія: {e}"))?;
@@ -376,6 +395,7 @@ impl RuntimeManager {
     #[cfg(not(windows))]
     fn start_engine(
         &mut self,
+        _app: &AppHandle,
         _settings: &AppSettings,
         _learned_path: PathBuf,
         _data_dir: Option<PathBuf>,
@@ -409,6 +429,7 @@ impl EngineHandle {
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn engine_loop(
+    app: AppHandle,
     stop: Arc<AtomicBool>,
     cmd_rx: std::sync::mpsc::Receiver<EngineCommand>,
     exclusions: ExclusionRules,
@@ -417,6 +438,7 @@ fn engine_loop(
     rules: WordRules,
     seed: Vec<String>,
     learned_path: PathBuf,
+    sound_on_switch: bool,
 ) {
     use std::sync::mpsc::TryRecvError;
     use std::time::Duration;
@@ -436,6 +458,23 @@ fn engine_loop(
     }
     // `rules` несе whitelist коротких службових слів, особистий словник
     // (recognized) і per-word veto з налаштувань.
+
+    // Остання повідомлена в трей розкладка (debounce: емітимо лише на зміну).
+    // Перший прохід зі стартовим значенням `None` гарантовано емітне поточну.
+    let mut last_lang: Option<String> = None;
+    // Повідомити трей про поточну розкладку, якщо змінилась (на головному потоці —
+    // tray-операції Win32 мають іти звідти). `run_on_main_thread` не блокує цикл.
+    let notify_layout = |app: &AppHandle, lang: &str, last: &mut Option<String>| {
+        if last.as_deref() == Some(lang) {
+            return;
+        }
+        *last = Some(lang.to_string());
+        let app2 = app.clone();
+        let lang2 = lang.to_string();
+        let _ = app.run_on_main_thread(move || crate::on_engine_layout(&app2, &lang2));
+    };
+    // Емітимо стартову розкладку одразу (трей покаже UK/EN, а не просто «активний»).
+    notify_layout(&app, platform.current_layout().as_str(), &mut last_lang);
 
     // Застосувати набір дій + персист самонавчання (спільне для step і команд).
     // Платформа приходить параметром (не захоплюється) → без конфлікту борроу
@@ -498,9 +537,13 @@ fn engine_loop(
             continue;
         };
 
+        // Поточна розкладка (до можливого нашого перемикання) — для трей-індикатора.
+        let cur_layout = platform.current_layout();
+        let cur_lang = cur_layout.as_str().to_string();
+
         let ctx = Context {
             active_window: platform.active_window(),
-            current_layout: platform.current_layout(),
+            current_layout: cur_layout,
             languages: &languages,
             config,
             exclusions: &exclusions,
@@ -508,7 +551,14 @@ fn engine_loop(
         };
 
         let actions = step(&mut state, event, &ctx);
+        // Звук (B2): лише на НАШ справжній авто-перенабір і лише коли увімкнено.
+        if sound_on_switch && is_real_switch(&actions) {
+            crate::feedback::play_switch_sound();
+        }
         apply_actions(&mut platform, &actions);
+
+        // Трей-індикатор поточної розкладки (емітимо лише на зміну).
+        notify_layout(&app, &cur_lang, &mut last_lang);
     }
     // Вихід із циклу → drop(platform) знімає хуки.
 }
@@ -556,6 +606,26 @@ mod tests {
                 && on.phonotactics_enabled
                 && on.capslock_fix_enabled
         );
+    }
+
+    #[test]
+    fn is_real_switch_needs_switch_plus_retype() {
+        use typofix_core::Action;
+        // Справжній авто-перенабір: delete + switch + type.
+        let real = [
+            Action::DeleteChars(5),
+            Action::SwitchLayout(LayoutId::new("en")),
+            Action::TypeUnicode("hello".into()),
+        ];
+        assert!(is_real_switch(&real));
+        // Лише текст / лише switch / самонавчання / порожньо — НЕ наш перенабір.
+        assert!(!is_real_switch(&[Action::TypeUnicode("x".into())]));
+        assert!(!is_real_switch(&[Action::SwitchLayout(LayoutId::new(
+            "uk"
+        ))]));
+        assert!(!is_real_switch(&[Action::CommitException("слово".into())]));
+        assert!(!is_real_switch(&[Action::None]));
+        assert!(!is_real_switch(&[]));
     }
 
     #[test]

@@ -199,6 +199,35 @@ npm --prefix ui install
   `Ctrl+Alt+P`; Backspace/Delete — очистити), але лишається й текстово редагованим.
   i18n — `hotkeys.*` у `i18n.js`; typedef `Hotkeys`/`HotkeyBinding` у `api.js`.
 
+## Зворотний зв'язок (B2): звук + трей-індикатор
+- **Прапорець:** `feedback.sound_on_switch: bool` (default `false`) у новій `FeedbackDto`
+  (`config.rs`, окремо від `behavior` — це сигнал, не евристика). `serde(default)` →
+  back-compat; `SCHEMA_VERSION` 3→4. UI — картка «Звук і сповіщення» (`feedback.*` i18n,
+  typedef `Feedback`).
+- **Звук (`feedback.rs`):** короткий вбудований wav `assets/switch.wav` (~4.4 КБ, згенеровано),
+  `include_bytes!`. Відтворення — Win32 `PlaySoundW` з `SND_MEMORY|SND_ASYNC|SND_NODEFAULT`
+  (з пам'яті, **не блокує** hot-path, тиша при помилці). Не-Windows — заглушка. Феатура
+  `Win32_Media_Audio` у `windows-sys`.
+- **Коли грати:** у `engine_loop` ПІСЛЯ `step()`, якщо `sound_on_switch && is_real_switch(&actions)`.
+  `runtime::is_real_switch` (чисте, тестоване) = дії містять І `SwitchLayout`, І `TypeUnicode`
+  (справжній авто-перенабір, а не пропуск/самонавчання). **Анти-цикл:** грає лише на НАШ
+  перенабір (синтетичний ввід не дає switch-крок), і ніколи на паузі (потік не крутиться).
+  Прокид: `start_engine` бере `settings.feedback.sound_on_switch` → `engine_loop`.
+- **Трей-індикатор розкладки:** `engine_loop` тримає `AppHandle` (клон) і на ЗМІНУ розкладки
+  (`platform.current_layout()`, debounce через `last_lang`) кличе `crate::on_engine_layout`
+  **через `app.run_on_main_thread`** (tray-операції Win32 мусять іти з головного потоку).
+  `on_engine_layout` пише `AppState.current_lang` і викликає `refresh_tray`.
+- **`refresh_tray(app, enabled)`** тепер ставить: (1) **іконку** — `TrayIcons.active` vs
+  `.paused` (приглушена grayscale+напівпрозора копія, `make_paused_icon`, будується раз у
+  `setup` через `Image::new_owned` → `'static`); (2) **tooltip** — «на паузі» / «активний (UK/EN)»
+  (мова з `current_lang`). Пауза-toggle скидає `current_lang=None`.
+- **Готча — порядок у `setup`:** `TrayIcons` керується ДО `sync_runtime`; стартова емісія
+  розкладки з потоку рушія йде через `run_on_main_thread` (відкладено), тож виконається
+  вже ПІСЛЯ побудови трею. `on_engine_layout` має `#[cfg_attr(not(windows), allow(dead_code))]`
+  (на не-Windows рушій-потоку нема).
+- **`RuntimeManager::apply`/`start_engine` тепер беруть `&AppHandle`** (для клону в потік).
+  Єдиний кличе — `lib.rs::sync_runtime`. `live_engine.rs` свій цикл, `apply` не зачіпає.
+
 ## Рантайм-цикл рушія (`runtime.rs`) — серце Фази 5
 Зв'язує живу платформу (Windows-хук) із чистим ядром.
 - **`RuntimeManager`** (Tauri-стан за `Mutex`) керує життям потоку `typofix-engine`.

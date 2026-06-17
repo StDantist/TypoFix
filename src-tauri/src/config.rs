@@ -21,9 +21,9 @@ use tauri::{AppHandle, Manager};
 pub const SETTINGS_FILE: &str = "settings.json";
 
 /// Поточна версія схеми конфігу (для майбутніх міграцій).
-/// v2 додав секцію `hotkeys`, v3 — `behavior` (бекворд-сумісно: відсутнє поле →
-/// дефолт через `serde(default)`).
-pub const SCHEMA_VERSION: u32 = 3;
+/// v2 додав секцію `hotkeys`, v3 — `behavior`, v4 — `feedback` (бекворд-сумісно:
+/// відсутнє поле → дефолт через `serde(default)`).
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Мовна пара. Поки фіксовано uk↔en, але закладено в модель як enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -223,6 +223,16 @@ impl Default for BehaviorDto {
     }
 }
 
+/// Зворотний зв'язок (B2): як апка СПОВІЩАЄ користувача про дії. Окремо від
+/// `behavior` (що саме виправляти) — це сигнали, а не евристики детектора.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeedbackDto {
+    /// Грати короткий звук при КОЖНОМУ успішному авто-перенаборі. Default `false`
+    /// (тихо — вмикається свідомо, щоб не дратувати). Прокидається в `engine_loop`.
+    pub sound_on_switch: bool,
+}
+
 /// Кореневий DTO налаштувань, який серіалізується у `settings.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -241,6 +251,8 @@ pub struct AppSettings {
     pub hotkeys: HotkeysDto,
     /// Перемикачі поведінки детектора (B4): on/off окремих евристик.
     pub behavior: BehaviorDto,
+    /// Зворотний зв'язок (B2): звук/сповіщення.
+    pub feedback: FeedbackDto,
     /// Пороги детектора (advanced).
     pub detection: DetectionDto,
 }
@@ -255,6 +267,7 @@ impl Default for AppSettings {
             words: WordsDto::default(),
             hotkeys: HotkeysDto::default(),
             behavior: BehaviorDto::default(),
+            feedback: FeedbackDto::default(),
             detection: DetectionDto::default(),
         }
     }
@@ -472,6 +485,15 @@ mod tests {
         assert!(HotkeyAction::ALL
             .iter()
             .all(|&a| !s.hotkeys.binding(a).enabled));
+    }
+
+    #[test]
+    fn feedback_missing_field_defaults_sound_off() {
+        // Старий settings.json (до v4) без секції `feedback` → звук вимкнено.
+        let partial = r#"{ "enabled": true }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        assert_eq!(s.feedback, FeedbackDto::default());
+        assert!(!s.feedback.sound_on_switch);
     }
 
     #[test]

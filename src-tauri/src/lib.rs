@@ -6,12 +6,14 @@
 
 // pub, щоб демо-бінар `src/bin/live_engine.rs` переюзав helper'и рантайму.
 pub mod config;
+mod feedback;
 mod hotkeys;
 pub mod runtime;
 
 use std::sync::Mutex;
 
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State, WindowEvent, Wry,
@@ -25,6 +27,16 @@ use runtime::RuntimeManager;
 #[derive(Default)]
 struct AppState {
     settings: Mutex<AppSettings>,
+    /// Поточна розкладка активного вікна (`"uk"`/`"en"`), яку повідомив рушій
+    /// (B2-індикатор у треї). `None` = ще невідомо / на паузі.
+    current_lang: Mutex<Option<String>>,
+}
+
+/// Дві версії трей-іконки (B2-індикатор): звичайна (активний) і приглушена
+/// (на паузі). Будуються один раз у `setup` з вшитої іконки застосунку.
+struct TrayIcons {
+    active: Image<'static>,
+    paused: Image<'static>,
 }
 
 const TRAY_ID: &str = "main-tray";
@@ -147,24 +159,93 @@ fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
     let mut guard = manager.lock().expect("RuntimeManager отруєно");
     // Самостійний пошук моделей (env → ресурси бандла → поряд з .exe); інакше зразки.
     let data_dir = resolve_data_dir(app);
-    if let Err(err) = guard.apply(settings, learned_path, data_dir) {
+    if let Err(err) = guard.apply(app, settings, learned_path, data_dir) {
         eprintln!("TypoFix: рушій не стартував: {err}");
     }
 }
 
-/// Оновити трей-меню й tooltip під поточний `enabled`.
+/// Людська мітка розкладки для трею: `"uk"`→`"UK"`, `"en"`→`"EN"`, інше — в upper.
+fn lang_label(lang: &str) -> String {
+    lang.to_uppercase()
+}
+
+/// Оновити трей: меню, ІКОНКУ (активна/приглушена) і tooltip із поточною розкладкою.
+/// Tooltip: «на паузі» коли вимкнено; «активний (UK/EN)» коли працює (розкладку
+/// бере з `AppState.current_lang`, яку оновлює рушій — B2-індикатор).
 fn refresh_tray(app: &AppHandle, enabled: bool) {
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if let Ok(menu) = build_tray_menu(app, enabled) {
-            let _ = tray.set_menu(Some(menu));
-        }
-        let tip = if enabled {
-            "TypoFix — активний"
-        } else {
-            "TypoFix — на паузі"
-        };
-        let _ = tray.set_tooltip(Some(tip));
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+    if let Ok(menu) = build_tray_menu(app, enabled) {
+        let _ = tray.set_menu(Some(menu));
     }
+
+    // Іконка: активна vs приглушена (чітко видно стан без наведення).
+    if let Some(icons) = app.try_state::<TrayIcons>() {
+        let icon = if enabled {
+            icons.active.clone()
+        } else {
+            icons.paused.clone()
+        };
+        let _ = tray.set_icon(Some(icon));
+    }
+
+    // Tooltip: пауза / активний (+ розкладка, якщо відома).
+    let tip = if !enabled {
+        "TypoFix — на паузі".to_string()
+    } else {
+        let lang = app
+            .state::<AppState>()
+            .current_lang
+            .lock()
+            .expect("AppState отруєно")
+            .clone();
+        match lang {
+            Some(l) => format!("TypoFix — активний ({})", lang_label(&l)),
+            None => "TypoFix — активний".to_string(),
+        }
+    };
+    let _ = tray.set_tooltip(Some(&tip));
+}
+
+/// Колбек від рушія (на головному потоці через `run_on_main_thread`): рушій
+/// повідомив поточну розкладку активного вікна. Зберігаємо й оновлюємо трей.
+/// `pub(crate)` — викликається з `runtime::engine_loop` (лише Windows; на інших
+/// цілях рушій-потоку нема, тож тут — `allow(dead_code)`).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn on_engine_layout(app: &AppHandle, lang: &str) {
+    {
+        let state = app.state::<AppState>();
+        let mut cur = state.current_lang.lock().expect("AppState отруєно");
+        if cur.as_deref() == Some(lang) {
+            return; // без змін — не смикаємо трей
+        }
+        *cur = Some(lang.to_string());
+    }
+    let enabled = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .expect("AppState отруєно")
+        .enabled;
+    refresh_tray(app, enabled);
+}
+
+/// Зробити «приглушену» (паузну) копію іконки: знебарвити (grayscale) і зробити
+/// напівпрозорою — щоб стан паузи був візуально очевидним у треї.
+fn make_paused_icon(active: &Image<'_>) -> Image<'static> {
+    let (w, h) = (active.width(), active.height());
+    let mut rgba = active.rgba().to_vec();
+    for px in rgba.chunks_exact_mut(4) {
+        // Яскравість за Rec. 601; альфу прибираємо до ~43% (приглушений вигляд).
+        let gray =
+            ((u32::from(px[0]) * 30 + u32::from(px[1]) * 59 + u32::from(px[2]) * 11) / 100) as u8;
+        px[0] = gray;
+        px[1] = gray;
+        px[2] = gray;
+        px[3] = (u32::from(px[3]) * 110 / 255) as u8;
+    }
+    Image::new_owned(rgba, w, h)
 }
 
 /// Перемкнути «увімкнено» з трею: оновити стан, зберегти на диск,
@@ -178,7 +259,11 @@ pub(crate) fn toggle_enabled(app: &AppHandle) {
         settings.clone()
     };
 
-    // TODO: тут під'єднати реальну паузу/відновлення hot-path хука (платформа).
+    // На паузі розкладка-індикатор більше не актуальна (рушій зупиниться) —
+    // скидаємо, щоб трей не показував стару мову після відновлення до емісії.
+    if !snapshot.enabled {
+        *state.current_lang.lock().expect("AppState отруєно") = None;
+    }
 
     if let Err(err) = config::save_to_disk(app, &snapshot) {
         // Не валимо застосунок через помилку диска — лише лог у stderr.
@@ -582,7 +667,25 @@ pub fn run() {
                 .lock()
                 .expect("AppState отруєно") = initial.clone();
 
+            // Дві версії трей-іконки (B2-індикатор): активна = вшита іконка
+            // застосунку; паузна = її приглушена (grayscale+прозоріша) копія.
+            // Будуємо ВЛАСНІ (`new_owned`) → `Image<'static>` (інакше клон лишається
+            // позиченим від `App` і не може зберігатись у стані).
+            let active_icon = {
+                let src = app
+                    .default_window_icon()
+                    .expect("default window icon має бути вшита через bundle.icon");
+                Image::new_owned(src.rgba().to_vec(), src.width(), src.height())
+            };
+            let paused_icon = make_paused_icon(&active_icon);
+            app.manage(TrayIcons {
+                active: active_icon.clone(),
+                paused: paused_icon.clone(),
+            });
+
             // Піднімаємо рушій, якщо застосунок увімкнено (на паузі — нічого).
+            // Рушій одразу запланує (через головний потік) емісію поточної
+            // розкладки → on_engine_layout оновить трей ПІСЛЯ його побудови нижче.
             sync_runtime(&handle, &initial);
 
             // Реєструємо глобальні хоткеї з конфіга (незалежно від enabled —
@@ -591,12 +694,8 @@ pub fn run() {
 
             let menu = build_tray_menu(&handle, enabled)?;
 
-            // Іконку трею беремо з вшитої іконки застосунку (bundle.icon).
-            let icon = app
-                .default_window_icon()
-                .cloned()
-                .expect("default window icon має бути вшита через bundle.icon");
-
+            // Початкові іконка/тултип за станом enabled; розкладку додасть рушій.
+            let icon = if enabled { active_icon } else { paused_icon };
             let tooltip = if enabled {
                 "TypoFix — активний"
             } else {

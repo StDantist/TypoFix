@@ -15,7 +15,7 @@
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
     return {
-      version: 3,
+      version: 4,
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
@@ -27,6 +27,7 @@
         phonotactics: true,
         fix_capslock: true,
       },
+      feedback: { sound_on_switch: false },
       hotkeys: {
         pause_resume: { accelerator: "Ctrl+Alt+P", enabled: false },
         revert_last: { accelerator: "Ctrl+Alt+Z", enabled: false },
@@ -360,6 +361,19 @@
         <span class="sens-end">{$t("behavior.sensitivity.aggressive")}</span>
       </div>
       <p class="desc">{$t("behavior.sensitivity.hint")}</p>
+    </div>
+  </section>
+
+  <!-- Звук і сповіщення (B2) -->
+  <section class="card">
+    <h2>{$t("section.feedback.title")}</h2>
+    <p class="desc">{$t("section.feedback.desc")}</p>
+    <div class="behavior-row">
+      <Toggle
+        bind:checked={settings.feedback.sound_on_switch}
+        label={$t("feedback.sound_on_switch")}
+      />
+      <span class="hint">{$t("feedback.sound_on_switch.hint")}</span>
     </div>
   </section>
 

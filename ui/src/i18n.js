@@ -68,6 +68,13 @@ const messages = {
     "words.add.always": "Додати слово",
     "words.add.never": "Додати слово",
 
+    // Звук і сповіщення (B2)
+    "section.feedback.title": "Звук і сповіщення",
+    "section.feedback.desc": "Як TypoFix підтверджує виправлення.",
+    "feedback.sound_on_switch": "Звук при перемиканні",
+    "feedback.sound_on_switch.hint":
+      "короткий сигнал щоразу, коли TypoFix перенабирає слово (за замовчуванням вимкнено)",
+
     // Гарячі клавіші
     "section.hotkeys.title": "Гарячі клавіші",
     "section.hotkeys.desc":

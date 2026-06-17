@@ -345,6 +345,36 @@ cargo run -p typofix-app --bin live_engine
 - `LearnedExceptions` не має геттера слів — тому персистимо НЕ читанням стану ядра,
   а перехопленням потоку `CommitException` на app-шарі.
 
+### Перегляд/керування навченими словами (B3, частина 1)
+- **Команди (`lib.rs`):** `list_learned() -> Vec<String>` (через
+  `runtime::learned_for_display`: дедуп регістронезалежно + сортування),
+  `remove_learned(word) -> bool` (прибрати одне), `clear_learned()` (очистити все).
+  Обгортки в `api.js`: `listLearned`/`removeLearned`/`clearLearned`. i18n — `learned.*`.
+  Власні app-команди → працюють у межах `core:default` (новий permission НЕ потрібен).
+- **Запис АТОМАРНИЙ:** `runtime::write_learned`/`remove_learned` — tmp(`.txt.tmp`)→
+  `rename` поверх цілі (як `config::save_to_disk`). Видалення регістронезалежне;
+  `remove_learned` повертає `false`, якщо слова не було (файл не чіпаємо).
+- **СИНХРОН IN-MEMORY (готча!):** `EngineState.learned` засівається з файлу ЛИШЕ при
+  старті потоку (`start_engine`→`load_learned`); core НЕ має API видалення слова з
+  пам'яті (і ми не чіпаємо `crates/*`). Тому після `remove_learned`/`clear_learned`
+  команда викликає `sync_runtime(&app, &settings)` — той самий шлях, що `save_settings`:
+  `stop_engine`+`start_engine` → свіжий `load_learned` із редукованого файлу. Без цього
+  слово ігнорувалось би до перезапуску застосунку. `sync_runtime` сам зважає на `enabled`
+  (на паузі движка нема — просто перезапис файлу).
+- **UI:** картка «Навчені слова» (`App.svelte`) — лічильник + «Оновити» + «Очистити все»
+  + список із кнопкою ✕ на кожен запис; порожній стан — дружнє повідомлення. Стан
+  `learned` ОКРЕМИЙ від `settings`/`dirty` (це не конфіг; Save його не чіпає,
+  застосовується миттєво). Стиль повторює `RuleList`.
+- **Приватність:** ці слова вже на диску (як і раніше); нічого нового нікуди не шлемо.
+
+### Per-app повне вимкнення (B3, частина 2) — ВЖЕ є через `exclusions`
+Семантика виключень = **ПОВНЕ вимкнення**, не часткове. `typofix_core::step` (і
+`force_switch_last`) ПЕРШИМ ділом перевіряє `ctx.is_window_excluded()` і повертає
+`Vec::new()` — вікно у списку виключень НЕ буферимо й НЕ перемикаємо взагалі. Тож
+B3.4 «у цій програмі не працювати» забезпечує наявний механізм `exclusions`
+(process/exe/folder) — окремого «повного off» додавати НЕ треба. У B3 лише уточнено
+формулювання UI картки виключень («У цих програмах TypoFix узагалі не працює»).
+
 ## Дозволи (capabilities) — НЕ забути при додаванні команд/плагінів
 `capabilities/default.json` (window `settings`) перелічує дозволи. Без потрібного
 дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,
@@ -352,5 +382,5 @@ events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/те
 плагін `tauri-plugin-dialog`), `global-shortcut:allow-register/-unregister/-unregister-all/-is-registered`
 (плагін `tauri-plugin-global-shortcut`), `autostart:allow-enable/-disable/-is-enabled`
 (плагін `tauri-plugin-autostart`, B5). Власні app-команди (`load_settings`/`save_settings`/
-`get_autostart`/`set_autostart`) працюють у межах `core:default`. Додаєш плагін → додай
-його permission сюди.
+`get_autostart`/`set_autostart`/`list_learned`/`remove_learned`/`clear_learned`)
+працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.

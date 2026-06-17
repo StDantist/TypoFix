@@ -99,6 +99,28 @@ export function setAutostart(enabled) {
   return invoke("set_autostart", { enabled });
 }
 
+/**
+ * Список авто-навчених слів (відкинуті користувачем перенабори; движок їх ігнорує).
+ * Дедуплікований і відсортований. @returns {Promise<string[]>}
+ */
+export function listLearned() {
+  return invoke("list_learned");
+}
+
+/**
+ * Прибрати одне слово зі списку навчених. Повертає `true`, якщо слово було.
+ * @param {string} word
+ * @returns {Promise<boolean>}
+ */
+export function removeLearned(word) {
+  return invoke("remove_learned", { word });
+}
+
+/** Очистити весь список навчених слів. @returns {Promise<void>} */
+export function clearLearned() {
+  return invoke("clear_learned");
+}
+
 /** Діалог вибору теки. @returns {Promise<string|null>} */
 export async function pickFolder() {
   const res = await open({ directory: true, multiple: false });

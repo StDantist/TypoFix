@@ -257,6 +257,61 @@ pub fn append_learned(path: &Path, word: &str) -> std::io::Result<()> {
     writeln!(file, "{w}")
 }
 
+/// Навчені слова, готові для показу в UI: дедуплікація (регістронезалежно, лишаємо
+/// перший варіант) + сортування (регістронезалежно). Файлу немає → порожньо.
+pub fn learned_for_display(path: &Path) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for w in load_learned(path) {
+        let key = w.to_lowercase();
+        if !seen.iter().any(|s| s.to_lowercase() == key) {
+            seen.push(w);
+        }
+    }
+    seen.sort_by_key(|w| w.to_lowercase());
+    seen
+}
+
+/// Перезаписати файл навчених слів АТОМАРНО (tmp → rename), по слову на рядок
+/// (як `config::save_to_disk`). Порожній список → файл стає порожнім (шлях лишається
+/// валідним для подальшого `append_learned`). Створює каталог за потреби.
+pub fn write_learned(path: &Path, words: &[String]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut body = String::new();
+    for w in words {
+        let w = w.trim();
+        if !w.is_empty() {
+            body.push_str(w);
+            body.push('\n');
+        }
+    }
+    let tmp = path.with_extension("txt.tmp");
+    fs::write(&tmp, body)?;
+    fs::rename(&tmp, path)
+}
+
+/// Прибрати одне слово з файлу навчених (регістронезалежно), зберігши решту.
+/// Повертає `true`, якщо слово було й файл перезаписано без нього; `false` — якщо
+/// слова не було (файл не чіпаємо). Атомарний перезапис через [`write_learned`].
+pub fn remove_learned(path: &Path, word: &str) -> std::io::Result<bool> {
+    let target = word.trim().to_lowercase();
+    if target.is_empty() {
+        return Ok(false);
+    }
+    let current = load_learned(path);
+    let kept: Vec<String> = current
+        .iter()
+        .filter(|w| w.trim().to_lowercase() != target)
+        .cloned()
+        .collect();
+    if kept.len() == current.len() {
+        return Ok(false); // нічого не видалили
+    }
+    write_learned(path, &kept)?;
+    Ok(true)
+}
+
 // ===========================================================================
 // Менеджер рантайму: старт/стоп потоку рушія
 // ===========================================================================
@@ -792,6 +847,57 @@ mod tests {
 
         let words = load_learned(&path);
         assert_eq!(words, vec!["привіт", "світ"]);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn learned_for_display_dedups_and_sorts_case_insensitive() {
+        let path = std::env::temp_dir().join(format!("typofix-disp-{}.txt", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        append_learned(&path, "Сонце").unwrap();
+        append_learned(&path, "ліс").unwrap();
+        append_learned(&path, "сонце").unwrap(); // дубль за регістром
+        append_learned(&path, "Авто").unwrap();
+
+        // Дедуп лишає ПЕРШИЙ варіант ("Сонце"), сортує регістронезалежно.
+        let words = learned_for_display(&path);
+        assert_eq!(words, vec!["Авто", "ліс", "Сонце"]);
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn remove_learned_drops_word_case_insensitive_and_keeps_rest() {
+        let path = std::env::temp_dir().join(format!("typofix-rm-{}.txt", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        append_learned(&path, "привіт").unwrap();
+        append_learned(&path, "світ").unwrap();
+
+        // Видалення регістронезалежне; повертає true.
+        assert!(remove_learned(&path, "ПРИВІТ").unwrap());
+        assert_eq!(load_learned(&path), vec!["світ"]);
+
+        // Слова немає → false, файл не змінено.
+        assert!(!remove_learned(&path, "немає").unwrap());
+        assert_eq!(load_learned(&path), vec!["світ"]);
+
+        // Порожнє слово → no-op false.
+        assert!(!remove_learned(&path, "   ").unwrap());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_learned_empty_clears_file() {
+        let path = std::env::temp_dir().join(format!("typofix-clr-{}.txt", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        append_learned(&path, "слово").unwrap();
+        write_learned(&path, &[]).unwrap();
+        assert!(load_learned(&path).is_empty());
 
         let _ = fs::remove_file(&path);
     }

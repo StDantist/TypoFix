@@ -330,6 +330,48 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     Ok(actual)
 }
 
+/// Шлях до файлу авто-навчених винятків (поряд із `settings.json`).
+fn learned_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(config::config_dir(app)?.join(runtime::LEARNED_FILE))
+}
+
+/// Команда: список авто-навчених слів (дедуп + сортування) для перегляду в UI.
+/// Це слова, які користувач відкинув (Backspace/revert) — движок їх ігнорує.
+/// Приватність: лише читаємо вже наявний на диску файл, нічого не шлемо.
+#[tauri::command]
+fn list_learned(app: AppHandle) -> Result<Vec<String>, String> {
+    Ok(runtime::learned_for_display(&learned_path(&app)?))
+}
+
+/// Команда: прибрати одне слово зі списку навчених (атомарний перезапис файлу).
+/// Повертає `true`, якщо слово було. Якщо движок активний — переконфігуровуємо
+/// його (`sync_runtime`), бо `learned` засівається ЛИШЕ при старті потоку: інакше
+/// слово й далі ігнорувалось би до перезапуску застосунку.
+#[tauri::command]
+fn remove_learned(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    word: String,
+) -> Result<bool, String> {
+    let removed =
+        runtime::remove_learned(&learned_path(&app)?, &word).map_err(|e| e.to_string())?;
+    if removed {
+        let settings = state.settings.lock().expect("AppState отруєно").clone();
+        sync_runtime(&app, &settings);
+    }
+    Ok(removed)
+}
+
+/// Команда: очистити весь список навчених слів (атомарний перезапис у порожній).
+/// Як і `remove_learned`, переконфігуровує активний движок, щоб скинути seed.
+#[tauri::command]
+fn clear_learned(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    runtime::write_learned(&learned_path(&app)?, &[]).map_err(|e| e.to_string())?;
+    let settings = state.settings.lock().expect("AppState отруєно").clone();
+    sync_runtime(&app, &settings);
+    Ok(())
+}
+
 /// Один запис у списку запущених процесів для пікера виключень.
 /// `name` — exe-ім'я (напр. `chrome.exe`), `exe_path` — повний шлях, якщо доступний,
 /// `icon` — іконка exe як base64 PNG data-URL (`data:image/png;base64,…`) або `None`,
@@ -716,7 +758,10 @@ pub fn run() {
             save_settings,
             list_running_processes,
             get_autostart,
-            set_autostart
+            set_autostart,
+            list_learned,
+            remove_learned,
+            clear_learned
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -9,6 +9,9 @@
     pickFolder,
     getAutostart,
     setAutostart,
+    listLearned,
+    removeLearned,
+    clearLearned,
   } from "./lib/api.js";
   import Toggle from "./lib/Toggle.svelte";
   import RuleList from "./lib/RuleList.svelte";
@@ -107,6 +110,39 @@
   let autostartApplied = $state(false);
   let autostartError = $state(false);
 
+  // Навчені слова (B3): авто-навчені винятки з диска (learned_exceptions.txt).
+  // Окремий від `settings` стан — це не конфіг, а список, керований движком.
+  /** @type {string[]} */
+  let learned = $state([]);
+  let learnedError = $state(false);
+
+  async function reloadLearned() {
+    try {
+      learned = await listLearned();
+      learnedError = false;
+    } catch {
+      learnedError = true;
+    }
+  }
+
+  async function removeLearnedWord(/** @type {string} */ word) {
+    try {
+      await removeLearned(word);
+      await reloadLearned();
+    } catch {
+      learnedError = true;
+    }
+  }
+
+  async function clearAllLearned() {
+    try {
+      await clearLearned();
+      await reloadLearned();
+    } catch {
+      learnedError = true;
+    }
+  }
+
   $effect(() => {
     const want = autostart;
     if (want === autostartApplied) return; // ініціалізація / синк із трею — не реагуємо
@@ -166,6 +202,7 @@
 
   onMount(() => {
     reload();
+    reloadLearned();
     // Стан автозапуску читаємо з плагіна (реєстр — джерело істини), не з конфігу.
     getAutostart()
       .then((on) => {
@@ -374,6 +411,47 @@
         onremove={(i) => settings.words.never_switch.splice(i, 1)}
       />
     </div>
+  </section>
+
+  <!-- Навчені слова (B3): авто-навчені винятки, керовані движком -->
+  <section class="card">
+    <h2>{$t("section.learned.title")}</h2>
+    <p class="desc">{$t("section.learned.desc")}</p>
+
+    <div class="learned-head">
+      <span class="hint">{$t("learned.count")} {learned.length}</span>
+      <div class="learned-actions">
+        <button type="button" onclick={reloadLearned}>{$t("learned.refresh")}</button>
+        <button
+          type="button"
+          onclick={clearAllLearned}
+          disabled={learned.length === 0}
+        >
+          {$t("learned.clearAll")}
+        </button>
+      </div>
+    </div>
+
+    {#if learnedError}
+      <p class="err">{$t("learned.error")}</p>
+    {:else if learned.length === 0}
+      <p class="muted">{$t("learned.empty")}</p>
+    {:else}
+      <ul class="learned-list">
+        {#each learned as word (word)}
+          <li>
+            <span class="badge">{$t("learned.badge")}</span>
+            <code title={word}>{word}</code>
+            <button
+              class="rm"
+              title={$t("learned.remove")}
+              aria-label={$t("learned.remove")}
+              onclick={() => removeLearnedWord(word)}>✕</button
+            >
+          </li>
+        {/each}
+      </ul>
+    {/if}
   </section>
 
   <!-- Поведінка (B4): тоггли евристик + людський повзунок чутливості -->
@@ -763,6 +841,84 @@
     margin: 0.6rem 0 0;
     color: #d9534f;
     font-size: 0.85rem;
+  }
+
+  /* Навчені слова (B3) */
+  .learned-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .learned-actions {
+    display: flex;
+    gap: 0.5rem;
+  }
+
+  .learned-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .learned-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.4rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  .learned-list .badge {
+    flex: none;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+
+  .learned-list code {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
+    font-size: 0.85rem;
+  }
+
+  .learned-list .rm {
+    flex: none;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0.1rem 0.3rem;
+    border-radius: 4px;
+  }
+
+  .learned-list .rm:hover {
+    color: #fff;
+    background: #d9534f;
+  }
+
+  .muted {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-style: italic;
   }
   .status .dim {
     color: var(--text-dim);

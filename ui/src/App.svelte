@@ -287,10 +287,14 @@
   </header>
 
   <!-- Загальне: увімкнено / пауза -->
-  <section class="card">
+  <section class="card" data-testid="card-general">
     <h2>{$t("section.general.title")}</h2>
     <div class="row">
-      <Toggle bind:checked={settings.enabled} label={$t("toggle.enabled.label")} />
+      <Toggle
+        bind:checked={settings.enabled}
+        label={$t("toggle.enabled.label")}
+        testid="enabled-toggle"
+      />
       <span class="hint">
         {settings.enabled ? $t("toggle.enabled.on") : $t("toggle.enabled.off")}
       </span>
@@ -298,17 +302,17 @@
   </section>
 
   <!-- Мовна пара -->
-  <section class="card">
+  <section class="card" data-testid="card-language">
     <h2>{$t("section.language.title")}</h2>
     <p class="desc">{$t("section.language.desc")}</p>
-    <select bind:value={settings.language}>
+    <select bind:value={settings.language} data-testid="language-select">
       <option value="uk-en">{$t("language.uk-en")}</option>
     </select>
     <p class="hint lang-note">{$t("section.language.note")}</p>
   </section>
 
   <!-- Виключення -->
-  <section class="card">
+  <section class="card" data-testid="card-exclusions">
     <h2>{$t("section.exclusions.title")}</h2>
     <p class="desc">{$t("section.exclusions.desc")}</p>
 
@@ -359,7 +363,7 @@
   </section>
 
   <!-- Слова-винятки (особистий словник) -->
-  <section class="card">
+  <section class="card" data-testid="card-words">
     <h2>{$t("section.words.title")}</h2>
     <p class="desc">{$t("section.words.desc")}</p>
 
@@ -415,12 +419,12 @@
   </section>
 
   <!-- Навчені слова (B3): авто-навчені винятки, керовані движком -->
-  <section class="card">
+  <section class="card" data-testid="card-learned">
     <h2>{$t("section.learned.title")}</h2>
     <p class="desc">{$t("section.learned.desc")}</p>
 
     <div class="learned-head">
-      <span class="hint">{$t("learned.count")} {learned.length}</span>
+      <span class="hint" data-testid="learned-count">{$t("learned.count")} {learned.length}</span>
       <div class="learned-actions">
         <button type="button" onclick={reloadLearned}>{$t("learned.refresh")}</button>
         <button
@@ -436,7 +440,7 @@
     {#if learnedError}
       <p class="err">{$t("learned.error")}</p>
     {:else if learned.length === 0}
-      <p class="muted">{$t("learned.empty")}</p>
+      <p class="muted" data-testid="learned-empty">{$t("learned.empty")}</p>
     {:else}
       <ul class="learned-list">
         {#each learned as word (word)}
@@ -456,14 +460,18 @@
   </section>
 
   <!-- Поведінка (B4): тоггли евристик + людський повзунок чутливості -->
-  <section class="card">
+  <section class="card" data-testid="card-behavior">
     <h2>{$t("section.behavior.title")}</h2>
     <p class="desc">{$t("section.behavior.desc")}</p>
 
     <div class="behavior-list">
       {#each BEHAVIOR_TOGGLES as b (b.key)}
         <div class="behavior-row">
-          <Toggle bind:checked={settings.behavior[b.key]} label={$t(`behavior.${b.key}`)} />
+          <Toggle
+            bind:checked={settings.behavior[b.key]}
+            label={$t(`behavior.${b.key}`)}
+            testid={`behavior-${b.key}`}
+          />
           <span class="hint">{$t(b.hint)}</span>
         </div>
       {/each}
@@ -479,6 +487,7 @@
           max="100"
           step="5"
           value={sensitivity}
+          data-testid="sensitivity-slider"
           oninput={(e) => setSensitivity(e.currentTarget.value)}
         />
         <span class="sens-end">{$t("behavior.sensitivity.aggressive")}</span>
@@ -488,11 +497,11 @@
   </section>
 
   <!-- Системне (B5): автозапуск разом із Windows -->
-  <section class="card">
+  <section class="card" data-testid="card-system">
     <h2>{$t("section.system.title")}</h2>
     <p class="desc">{$t("section.system.desc")}</p>
     <div class="behavior-row">
-      <Toggle bind:checked={autostart} label={$t("system.autostart")} />
+      <Toggle bind:checked={autostart} label={$t("system.autostart")} testid="autostart-toggle" />
       <span class="hint">{$t("system.autostart.hint")}</span>
     </div>
     {#if autostartError}
@@ -501,7 +510,7 @@
   </section>
 
   <!-- Звук і сповіщення (B2) -->
-  <section class="card">
+  <section class="card" data-testid="card-feedback">
     <h2>{$t("section.feedback.title")}</h2>
     <p class="desc">{$t("section.feedback.desc")}</p>
     <div class="behavior-row">
@@ -514,7 +523,7 @@
   </section>
 
   <!-- Гарячі клавіші -->
-  <section class="card">
+  <section class="card" data-testid="card-hotkeys">
     <h2>{$t("section.hotkeys.title")}</h2>
     <p class="desc">{$t("section.hotkeys.desc")}</p>
 
@@ -572,9 +581,9 @@
 
   <!-- Панель дій -->
   <footer class="actions">
-    <div class="status">
+    <div class="status" data-testid="save-status" data-status={statusKey}>
       {#if statusKey === "saved"}
-        <span class="ok">✓ {$t("status.saved")}</span>
+        <span class="ok" data-testid="status-saved">✓ {$t("status.saved")}</span>
       {:else if statusKey === "saveError"}
         <span class="err" title={statusDetail}>{$t("status.saveError")}: {statusDetail}</span>
       {:else if statusKey === "loadError"}
@@ -587,7 +596,7 @@
       <button class="secondary" onclick={reload} disabled={!dirty}>
         {$t("action.cancel")}
       </button>
-      <button class="primary" onclick={save} disabled={!dirty}>
+      <button class="primary" onclick={save} disabled={!dirty} data-testid="save-button">
         {$t("action.save")}
       </button>
     </div>

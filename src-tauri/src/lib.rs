@@ -60,6 +60,13 @@ const MENU_SETTINGS: &str = "open_settings";
 const MENU_AUTOSTART: &str = "toggle_autostart";
 const MENU_QUIT: &str = "quit";
 
+/// Тест-режим UI-e2e (`TYPOFIX_E2E=1`): вікно налаштувань стартує ВИДИМИМ, а движок
+/// і глобальні хоткеї НЕ піднімаються — щоб автотест (tauri-driver) бачив DOM і не
+/// чіпав глобальну клавіатуру. Прод-поведінка без змінної — без змін.
+fn e2e_mode() -> bool {
+    std::env::var("TYPOFIX_E2E").as_deref() == Ok("1")
+}
+
 /// Показати (і сфокусувати) вікно налаштувань. Воно завжди існує — лише ховається.
 fn show_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(SETTINGS_WINDOW) {
@@ -158,6 +165,11 @@ fn resolve_data_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
 /// Привести рантайм-цикл рушія у відповідність до налаштувань (старт/стоп/рестарт).
 /// Помилки не валять застосунок — лише лог; GUI лишається живим.
 fn sync_runtime(app: &AppHandle, settings: &AppSettings) {
+    // UI-e2e: НІКОЛИ не піднімаємо движок (хуки) — ні на старті, ні зі `save_settings`/
+    // трей-toggle/learned-команд. Єдина точка-гард для всіх викликів.
+    if e2e_mode() {
+        return;
+    }
     let learned_path = match config::config_dir(app) {
         Ok(dir) => dir.join(runtime::LEARNED_FILE),
         Err(err) => {
@@ -733,9 +745,12 @@ fn save_settings(
     *state.settings.lock().expect("AppState отруєно") = cleaned.clone();
     refresh_tray(&app, cleaned.enabled);
     // Перебудувати рантайм-цикл під нові виключення/детектор/мову.
+    // (`sync_runtime`/`hotkeys::apply` — no-op у UI-e2e: тест не чіпає клавіатуру.)
     sync_runtime(&app, &cleaned);
     // Перереєструвати хоткеї під нові прив'язки (увімк./вимк./зміна акселератора).
-    hotkeys::apply(&app, &cleaned);
+    if !e2e_mode() {
+        hotkeys::apply(&app, &cleaned);
+    }
     Ok(cleaned)
 }
 
@@ -793,11 +808,14 @@ pub fn run() {
             // Піднімаємо рушій, якщо застосунок увімкнено (на паузі — нічого).
             // Рушій одразу запланує (через головний потік) емісію поточної
             // розкладки → on_engine_layout оновить трей ПІСЛЯ його побудови нижче.
-            sync_runtime(&handle, &initial);
+            // У UI-e2e режимі движок/хоткеї НЕ стартуємо (тест не чіпає клавіатуру).
+            if !e2e_mode() {
+                sync_runtime(&handle, &initial);
 
-            // Реєструємо глобальні хоткеї з конфіга (незалежно від enabled —
-            // інакше неможливо було б відновити роботу з клавіатури).
-            hotkeys::apply(&handle, &initial);
+                // Реєструємо глобальні хоткеї з конфіга (незалежно від enabled —
+                // інакше неможливо було б відновити роботу з клавіатури).
+                hotkeys::apply(&handle, &initial);
+            }
 
             let menu = build_tray_menu(&handle, enabled)?;
 
@@ -826,6 +844,12 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // UI-e2e: показуємо вікно налаштувань одразу (у проді воно `visible:false`
+            // і відкривається з трею) — щоб WebDriver бачив DOM без трей-взаємодії.
+            if e2e_mode() {
+                show_settings(&handle);
+            }
 
             Ok(())
         })

@@ -1,13 +1,20 @@
 <script>
   /**
    * Перемикач (switch). Двостороння прив'язка через $bindable.
-   * @type {{ checked: boolean, label?: string }}
+   * `testid` (опц.) — стабільний селектор для UI-e2e: лягає на клікабельний
+   * `<label>`, а на прихований `<input>` — як `${testid}-input` (читання стану).
+   * @type {{ checked: boolean, label?: string, testid?: string }}
    */
-  let { checked = $bindable(false), label = "" } = $props();
+  let { checked = $bindable(false), label = "", testid = "" } = $props();
 </script>
 
-<label class="toggle">
-  <input type="checkbox" bind:checked role="switch" />
+<label class="toggle" data-testid={testid || undefined}>
+  <input
+    type="checkbox"
+    bind:checked
+    role="switch"
+    data-testid={testid ? `${testid}-input` : undefined}
+  />
   <span class="track"><span class="thumb"></span></span>
   {#if label}<span class="label">{label}</span>{/if}
 </label>

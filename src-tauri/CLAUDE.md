@@ -400,6 +400,29 @@ B3.4 «у цій програмі не працювати» забезпечує
 (process/exe/folder) — окремого «повного off» додавати НЕ треба. У B3 лише уточнено
 формулювання UI картки виключень («У цих програмах TypoFix узагалі не працює»).
 
+## UI-e2e (рідний автотест вікна через tauri-driver/WebView2)
+- **Афорданс `TYPOFIX_E2E=1`** (`lib.rs`, `e2e_mode()`): вікно `settings` стартує
+  ВИДИМИМ + движок і глобальні хоткеї НЕ стартують (тест не чіпає глобальну
+  клавіатуру). Прод-поведінка без env — без змін. Гард — у двох місцях: `setup`
+  (пропускає `sync_runtime`/`hotkeys::apply`) і **early-return на початку
+  `sync_runtime`** (тож `save_settings`/трей-toggle/learned-команди теж no-op у тесті;
+  `hotkeys::apply` у `save_settings` теж за `!e2e_mode()`).
+- **Харнес:** `ui/e2e/` (WebdriverIO + `tauri-driver`). `npm run test:e2e`. Деталі/
+  передумови — `ui/e2e/README.md`.
+- **ГОТЧА — збірка для тесту:** лише `tauri build --no-bundle` (НЕ `cargo build
+  --release`!). `cargo build` робить бінар, що вантажить **dev-сервер
+  `localhost:1420`** замість вбудованого `ui/dist` → WebDriver не бачить розмітку
+  (порожній DOM без `data-testid`). `tauri build` вшиває `frontendDist`.
+- **ГОТЧА — msedgedriver під WebView2:** версія = версії **WebView2 Runtime**
+  (не Edge). Лежить у `ui/e2e/drivers/msedgedriver.exe` (gitignored); `wdio.conf.js`
+  передає його як `--native-driver`.
+- **Селектори:** стабільні `data-testid` у `App.svelte` (`card-*`, `behavior-<key>`(+`-input`),
+  `sensitivity-slider`, `language-select`, `save-button`, `save-status`/`data-status`).
+  Toggle.svelte має опц. `testid` (лягає на клікабельний `<label>` + `${testid}-input`).
+- **ГОТЧА — липкий футер:** `.actions` (`position:sticky; bottom:0`) перекриває нижні
+  елементи → «element click intercepted». Кліки в тесті — через `clickCentered()`
+  (scrollIntoView `block:center`).
+
 ## Дозволи (capabilities) — НЕ забути при додаванні команд/плагінів
 `capabilities/default.json` (window `settings`) перелічує дозволи. Без потрібного
 дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,

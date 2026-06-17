@@ -17,20 +17,35 @@
   /** @type {import("./api.js").ProcessEntry[]} */
   let processes = $state([]);
   let filter = $state("");
+  /** Показувати лише застосунки з видимим вікном (увімкнено за замовчуванням). */
+  let windowsOnly = $state(true);
   let loading = $state(true);
   /** @type {string} */
   let errorDetail = $state("");
 
   const addedLower = $derived(new Set(added.map((s) => s.toLowerCase())));
 
+  /** Збіг із текстовим пошуком (без урахування фільтра вікон). */
+  function matchesQuery(/** @type {import("./api.js").ProcessEntry} */ p, /** @type {string} */ q) {
+    if (!q) return true;
+    return (
+      p.name.toLowerCase().includes(q) ||
+      (p.exe_path ?? "").toLowerCase().includes(q)
+    );
+  }
+
   const filtered = $derived.by(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return processes;
     return processes.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (p.exe_path ?? "").toLowerCase().includes(q),
+      (p) => (!windowsOnly || p.has_window) && matchesQuery(p, q),
     );
+  });
+
+  /** Чи є збіги пошуку, приховані саме фільтром «лише з вікнами» (для натяку). */
+  const hiddenByWindowFilter = $derived.by(() => {
+    if (!windowsOnly) return 0;
+    const q = filter.trim().toLowerCase();
+    return processes.filter((p) => !p.has_window && matchesQuery(p, q)).length;
   });
 
   async function refresh() {
@@ -85,6 +100,11 @@
       </button>
     </div>
 
+    <label class="windows-only">
+      <input type="checkbox" bind:checked={windowsOnly} />
+      {$t("picker.windowsOnly")}
+    </label>
+
     <div class="body">
       {#if loading}
         <p class="muted">{$t("picker.loading")}</p>
@@ -92,6 +112,14 @@
         <p class="err" title={errorDetail}>{$t("picker.error")}: {errorDetail}</p>
       {:else if filtered.length === 0}
         <p class="muted">{$t("picker.none")}</p>
+        {#if hiddenByWindowFilter > 0}
+          <p class="hint-uncheck">
+            {$t("picker.hint.uncheck")}
+            <button type="button" class="link" onclick={() => (windowsOnly = false)}>
+              {$t("picker.hint.showAll")}
+            </button>
+          </p>
+        {/if}
       {:else}
         <ul>
           {#each filtered as p (p.name)}
@@ -207,10 +235,38 @@
     cursor: default;
   }
 
+  .windows-only {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0 1rem 0.6rem;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    cursor: pointer;
+    user-select: none;
+  }
+  .windows-only input {
+    cursor: pointer;
+  }
+
   .body {
     overflow-y: auto;
     padding: 0 1rem;
     flex: 1;
+  }
+
+  .hint-uncheck {
+    color: var(--text-dim);
+    font-size: 0.82rem;
+  }
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
   }
 
   .muted {

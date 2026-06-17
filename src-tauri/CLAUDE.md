@@ -85,7 +85,7 @@ npm --prefix ui install
   очищене). Диск — джерело істини; `AppState.settings` — синхронізована копія.
 - **`list_running_processes() -> Vec<ProcessEntry>`** (`lib.rs`): перелік ЗАРАЗ
   запущених процесів для пікера виключень. `ProcessEntry { name, exe_path: Option,
-  icon: Option }`. **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок,
+  icon: Option, has_window: bool }`. **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок,
   не на PID), сортовано за іменем. Через `sysinfo` (default-features off, лише
   `system`). `name` = file_name з exe-шляху (повне `chrome.exe`), fallback
   `process.name()`. Приватність: лише імена/шляхи/іконки, локально, нічого не пишемо/
@@ -107,19 +107,31 @@ npm --prefix ui install
     процес-глобальний, з негативним кешем): холодний витяг ~700мс на ~110 застосунків
     (~6мс/exe), теплий (кеш) ~34мс → «Оновити список» миттєвий; перше відкриття під
     спінером. Якщо колись стане критично — винести у лінивий `process_icon(path)`.
+  - **`has_window`** — чи має застосунок видиме верхньорівневе вікно. `window_pids()`
+    (cfg windows): Win32 `EnumWindows` → `IsWindowVisible` + `GetWindowTextLengthW > 0`
+    + не `WS_EX_TOOLWINDOW` (`GWL_EXSTYLE`) → `GetWindowThreadProcessId` → множина PID.
+    Оскільки дедуп за exe-іменем: `has_window = true`, якщо **БУДЬ-ЯКИЙ** PID цього exe
+    у множині (`e.has_window |= …`). `proc.pid().as_u32()` для звірки з множиною. На
+    не-Windows — порожня множина (фільтр нічого не ховає). Features вже є
+    (`Win32_UI_WindowsAndMessaging`). UI вмикає фільтр «лише з вікнами» за замовчуванням.
   - **CSP (готча!):** іконки — data-URL, тож `tauri.conf.json` `security.csp` має
     мати **`img-src 'self' data:`** (без нього default-src 'self' блокує data:-зображення).
     Зовнішні джерела НЕ додаємо (приватність).
   - Тестовно без GUI/хуків: юніти `list_running_processes_returns_deduped_sorted_nonempty`
-    (+ валідність data-URL) і `icons_are_extracted_for_most_processes_and_are_fast`
-    (покриття ≥50% процесів зі шляхом + друк часу холодний/теплий).
+    (+ валідність data-URL), `icons_are_extracted_for_most_processes_and_are_fast`
+    (покриття ≥50% процесів зі шляхом + друк часу холодний/теплий) і
+    `window_pids_consistent_with_has_window_flag` (вікна Є → ≥1 запис has_window;
+    headless 0 вікон — не стверджуємо; друкує лічильники).
 - **UI-пікер процесів** (`ui/src/lib/ProcessPicker.svelte`): модалка з полем-фільтром
   (пошук за іменем/шляхом), кнопкою «Оновити список», закриттям по Esc / кліку поза
   вмістом. Клік по запису → `onpick(name)` → `addUnique(process_names)` (можна додати
   кілька й закрити; уже додані позначені й disabled). Кнопка «Обрати із запущених…»
   у картці «Виключення». IPC-обгортка — `api.js::listRunningProcesses`. Кожен рядок
   показує `<img>`-іконку (data-URL) перед іменем; нема іконки → нейтральна заглушка
-  `.picon-ph` (тримає вирівнювання) + `exe_path` дрібним текстом.
+  `.picon-ph` (тримає вирівнювання) + `exe_path` дрібним текстом. Чекбокс «Лише
+  застосунки з вікнами» (default ON) фільтрує за `has_window`; пошук працює поверх.
+  Коли пошук нічого не дав серед віконних, але є приховані збіги — натяк із кнопкою
+  «Показати всі процеси» (знімає чекбокс).
 - **Синхрон трей↔вікно:** toggle у треї змінює `enabled`, пише на диск і емітить
   подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
   `enabled`, не чіпаючи можливих незбережених правок у формі.

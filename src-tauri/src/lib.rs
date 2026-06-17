@@ -191,13 +191,15 @@ fn toggle_enabled(app: &AppHandle) {
 
 /// Один запис у списку запущених процесів для пікера виключень.
 /// `name` — exe-ім'я (напр. `chrome.exe`), `exe_path` — повний шлях, якщо доступний,
-/// `icon` — іконка exe як base64 PNG data-URL (`data:image/png;base64,…`) або `None`.
+/// `icon` — іконка exe як base64 PNG data-URL (`data:image/png;base64,…`) або `None`,
+/// `has_window` — чи має застосунок видиме верхньорівневе вікно (БУДЬ-ЯКИЙ його PID).
 /// Приватність: лише імена/шляхи/іконки процесів, локально; нічого не зберігаємо й не шлемо.
 #[derive(Debug, Clone, serde::Serialize)]
 struct ProcessEntry {
     name: String,
     exe_path: Option<String>,
     icon: Option<String>,
+    has_window: bool,
 }
 
 /// Кеш іконок за exe-шляхом (процес-глобальний). Витяг через shell повільнуватий
@@ -412,6 +414,52 @@ mod win_icon {
     }
 }
 
+/// Множина PID-ів, що мають **видиме верхньорівневе вікно з заголовком** (не
+/// tool-window). Через Win32 `EnumWindows`. Дає змогу пікеру ховати фонові/системні
+/// процеси без вікон. На не-Windows — порожня множина (фільтр просто нічого не ховає).
+#[cfg(not(windows))]
+fn window_pids() -> std::collections::HashSet<u32> {
+    std::collections::HashSet::new()
+}
+
+#[cfg(windows)]
+fn window_pids() -> std::collections::HashSet<u32> {
+    use std::collections::HashSet;
+
+    use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowLongW, GetWindowTextLengthW, GetWindowThreadProcessId,
+        IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    };
+
+    // Колбек EnumWindows: збирає PID-и видимих вікон із заголовком (не tool-window).
+    unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam — вказівник на наш HashSet<u32> (переданий нижче); живий
+        // увесь час синхронного EnumWindows.
+        let set = unsafe { &mut *(lparam as *mut HashSet<u32>) };
+        // Видиме + має заголовок (відсіює фонові host-вікна без тексту).
+        if unsafe { IsWindowVisible(hwnd) } != 0 && unsafe { GetWindowTextLengthW(hwnd) } > 0 {
+            // Відсіюємо tool-windows (службові палітри/тултіпи — не «застосунки»).
+            let ex = unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) } as u32;
+            if ex & WS_EX_TOOLWINDOW == 0 {
+                let mut pid: u32 = 0;
+                unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+                if pid != 0 {
+                    set.insert(pid);
+                }
+            }
+        }
+        1 // TRUE — продовжувати перелік
+    }
+
+    let mut set: HashSet<u32> = HashSet::new();
+    // SAFETY: collect валідний; передаємо &mut set вказівником, він живе до повернення.
+    unsafe {
+        EnumWindows(Some(collect), (&mut set as *mut HashSet<u32>) as LPARAM);
+    }
+    set
+}
+
 /// Команда: перелік ЗАРАЗ ЗАПУЩЕНИХ процесів, **дедуплікований за exe-іменем**
 /// (один запис на застосунок, не на кожен PID), відсортований за іменем.
 /// Працює в межах `core:default` (як `load_settings`) — нового permission не треба.
@@ -429,6 +477,9 @@ fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
             .with_processes(ProcessRefreshKind::nothing().with_exe(UpdateKind::Always)),
     );
 
+    // PID-и з видимими вікнами — збираємо один раз, далі позначаємо записи.
+    let win_pids = window_pids();
+
     // Дедуп за нормалізованим (lowercase) exe-іменем. Якщо в одного імені кілька
     // PID-ів — лишаємо перший, але «доповнюємо» шляхом, якщо раніше його не було.
     let mut by_name: HashMap<String, ProcessEntry> = HashMap::new();
@@ -445,6 +496,8 @@ fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
             continue;
         }
 
+        let has_window = win_pids.contains(&proc.pid().as_u32());
+
         let key = name.to_lowercase();
         by_name
             .entry(key)
@@ -456,6 +509,8 @@ fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
                 if e.icon.is_none() {
                     e.icon = exe_path.as_deref().and_then(icon_for_exe);
                 }
+                // Достатньо, щоб БУДЬ-ЯКИЙ PID цього exe мав вікно.
+                e.has_window |= has_window;
             })
             .or_insert_with(|| {
                 let icon = exe_path.as_deref().and_then(icon_for_exe);
@@ -463,6 +518,7 @@ fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
                     name,
                     exe_path,
                     icon,
+                    has_window,
                 }
             });
     }
@@ -653,5 +709,24 @@ mod tests {
                 "очікували іконки хоча б у половини процесів зі шляхом: {with_icon}/{with_path}"
             );
         }
+    }
+
+    #[test]
+    fn window_pids_consistent_with_has_window_flag() {
+        let wp = window_pids();
+        let list = list_running_processes().expect("перелік процесів");
+        let has_win = list.iter().filter(|p| p.has_window).count();
+        println!("window_pids={} записів_has_window={}", wp.len(), has_win);
+
+        // У headless-середовищі вікон може не бути (0) — тоді нічого не стверджуємо.
+        // Якщо ж вікна Є, то хоча б один застосунок має позначитись has_window.
+        if !wp.is_empty() {
+            assert!(
+                has_win >= 1,
+                "є window-PID-и, але жодного запису з has_window"
+            );
+        }
+        // has_window-записів не може бути більше, ніж усіх записів.
+        assert!(has_win <= list.len());
     }
 }

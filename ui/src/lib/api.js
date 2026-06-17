@@ -41,6 +41,7 @@ export function saveSettings(settings) {
  * @property {string} name      exe-ім'я, напр. "chrome.exe"
  * @property {string|null} exe_path повний шлях, якщо доступний
  * @property {string|null} icon  base64 PNG data-URL іконки exe, якщо вдалось витягти
+ * @property {boolean} has_window чи має застосунок видиме верхньорівневе вікно
  */
 
 /**

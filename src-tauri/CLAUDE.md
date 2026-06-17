@@ -84,19 +84,42 @@ npm --prefix ui install
   `save_settings(settings)` (валідує `sanitized()`, пише, оновлює трей, повертає
   очищене). Диск — джерело істини; `AppState.settings` — синхронізована копія.
 - **`list_running_processes() -> Vec<ProcessEntry>`** (`lib.rs`): перелік ЗАРАЗ
-  запущених процесів для пікера виключень. `ProcessEntry { name, exe_path: Option }`.
-  **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок, не на PID),
-  сортовано за іменем. Через `sysinfo` (default-features off, лише `system`;
-  оновлюємо ТІЛЬКИ процеси — без CPU/RAM/дисків). `name` = file_name з exe-шляху
-  (повне `chrome.exe`), fallback `process.name()`. Приватність: лише імена/шляхи,
-  локально, нічого не пишемо/не шлемо. Власна app-команда → працює в межах
-  `core:default`, **новий permission НЕ потрібен** (як `load_settings`). Тестовно
-  без GUI/хуків: юніт `list_running_processes_returns_deduped_sorted_nonempty`.
+  запущених процесів для пікера виключень. `ProcessEntry { name, exe_path: Option,
+  icon: Option }`. **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок,
+  не на PID), сортовано за іменем. Через `sysinfo` (default-features off, лише
+  `system`). `name` = file_name з exe-шляху (повне `chrome.exe`), fallback
+  `process.name()`. Приватність: лише імена/шляхи/іконки, локально, нічого не пишемо/
+  не шлемо. Власна app-команда → працює в межах `core:default`, **новий permission НЕ
+  потрібен** (як `load_settings`).
+  - **ГОТЧА `with_exe`:** `ProcessRefreshKind::nothing()` НЕ заповнює exe-шлях →
+    `exe_path`/`name`/іконка були б порожні. Обов'язково
+    `ProcessRefreshKind::nothing().with_exe(UpdateKind::Always)`.
+  - **`icon`** = base64 PNG data-URL (`data:image/png;base64,…`) іконки exe. Витяг —
+    **Win32 напряму** (`mod win_icon`, уся unsafe-FFI ізольована): `SHGetFileInfoW`
+    → `HICON` → `GetIconInfo`/`GetDIBits` (32bpp top-down BGRA) → RGBA (альфа з
+    колірного bitmap; якщо вся 0 — відновлюємо з AND-маски) → PNG (`image` crate) →
+    base64. **Чому не `systemicons`:** він безумовно тягне `gtk-sys 0.14` (links
+    "gtk-3") → конфлікт у дереві. `windows-sys` 0.59 — та сама версія, що в
+    `typofix-platform-windows` (без дубля). `SHGetFileInfoW` гейтований на features
+    `Win32_Storage_FileSystem` + `Win32_UI_WindowsAndMessaging` (+ Shell, Gdi,
+    Foundation). На не-Windows — заглушка `icon: None` (macOS-витяг згодом).
+  - **Кеш іконок** `ICON_CACHE` (`OnceLock<Mutex<HashMap<path, Option<data-url>>>>`,
+    процес-глобальний, з негативним кешем): холодний витяг ~700мс на ~110 застосунків
+    (~6мс/exe), теплий (кеш) ~34мс → «Оновити список» миттєвий; перше відкриття під
+    спінером. Якщо колись стане критично — винести у лінивий `process_icon(path)`.
+  - **CSP (готча!):** іконки — data-URL, тож `tauri.conf.json` `security.csp` має
+    мати **`img-src 'self' data:`** (без нього default-src 'self' блокує data:-зображення).
+    Зовнішні джерела НЕ додаємо (приватність).
+  - Тестовно без GUI/хуків: юніти `list_running_processes_returns_deduped_sorted_nonempty`
+    (+ валідність data-URL) і `icons_are_extracted_for_most_processes_and_are_fast`
+    (покриття ≥50% процесів зі шляхом + друк часу холодний/теплий).
 - **UI-пікер процесів** (`ui/src/lib/ProcessPicker.svelte`): модалка з полем-фільтром
   (пошук за іменем/шляхом), кнопкою «Оновити список», закриттям по Esc / кліку поза
   вмістом. Клік по запису → `onpick(name)` → `addUnique(process_names)` (можна додати
   кілька й закрити; уже додані позначені й disabled). Кнопка «Обрати із запущених…»
-  у картці «Виключення». IPC-обгортка — `api.js::listRunningProcesses`.
+  у картці «Виключення». IPC-обгортка — `api.js::listRunningProcesses`. Кожен рядок
+  показує `<img>`-іконку (data-URL) перед іменем; нема іконки → нейтральна заглушка
+  `.picon-ph` (тримає вирівнювання) + `exe_path` дрібним текстом.
 - **Синхрон трей↔вікно:** toggle у треї змінює `enabled`, пише на диск і емітить
   подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
   `enabled`, не чіпаючи можливих незбережених правок у формі.

@@ -29,6 +29,8 @@ serde_json = "1"
 # Перелік запущених процесів для пікера виключень (кросплатформно — стане у пригоді
 # для майбутнього macOS-порту). Тягнемо лише модуль процесів (без CPU/RAM/дисків).
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+# Кодування PNG-іконки у base64 data-URL для передачі у webview.
+base64 = "0.22"
 # Ядро + спільні типи + завантаження даних. Path-залежності на крейти КОРЕНЕВОГО
 # workspace; це НЕ робить src-tauri його членом (ізоляція зберігається).
 typofix-core = { path = "../crates/typofix-core" }
@@ -39,6 +41,17 @@ typofix-data = { path = "../crates/typofix-data" }
 # (macOS-порт у майбутньому), тож крейт сюди не тягнемо.
 [target.'cfg(windows)'.dependencies]
 typofix-platform-windows = { path = "../crates/typofix-platform-windows" }
+# Витяг іконки exe напряму через Win32 (SHGetFileInfo → HICON → DIB → PNG). Версія
+# 0.59 — та сама, що в typofix-platform-windows (без дубля у дереві). macOS-витяг — згодом.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
+# PNG-кодування RGBA-буфера іконки (вже в дереві через tauri image-png — без дубля).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [features]
 # Дефолтна продакшн-конфігурація Tauri (custom protocol для вшитого фронтенду).

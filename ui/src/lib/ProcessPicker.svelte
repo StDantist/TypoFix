@@ -103,6 +103,11 @@
                 title={p.exe_path ?? p.name}
                 onclick={() => onpick(p.name)}
               >
+                {#if p.icon}
+                  <img class="picon" src={p.icon} alt="" width="18" height="18" />
+                {:else}
+                  <span class="picon picon-ph" aria-hidden="true"></span>
+                {/if}
                 <span class="pname">{p.name}</span>
                 {#if p.exe_path}<span class="ppath">{p.exe_path}</span>{/if}
                 <span class="state">{isAdded ? $t("picker.added") : "+"}</span>
@@ -247,6 +252,21 @@
   .row:disabled {
     opacity: 0.55;
     cursor: default;
+  }
+
+  .picon {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    border-radius: 3px;
+    align-self: center;
+  }
+  /* Заглушка-плейсхолдер: тримає вирівнювання, коли іконки немає. */
+  .picon-ph {
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    opacity: 0.6;
   }
 
   .pname {

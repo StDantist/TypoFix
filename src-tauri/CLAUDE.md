@@ -155,11 +155,32 @@ npm --prefix ui install
   кожного `save_settings`. **Хоткеї НЕ залежать від `enabled`** (пауза/активний):
   інакше не відновити роботу з клавіатури.
 - **Роутинг (`hotkeys::route`):** handler реагує лише на `ShortcutState::Pressed`
-  (кличеться й на Released). Цієї ітерації під'єднано **лише `PauseResume`** → той
-  самий `crate::toggle_enabled` (інверсія `enabled`, запис на диск, оновлення трею,
-  емісія `settings:changed`). Решта — заглушка з `TODO` + лог (revert/manual/case
-  прийдуть із core-API `revert_last`/`force_switch_last`/`transform_case` наступним
-  кроком). `toggle_enabled` тепер `pub(crate)` (дія для хоткея).
+  (кличеться й на Released). `PauseResume` → `crate::toggle_enabled` (`pub(crate)`;
+  інверсія `enabled`, запис на диск, оновлення трею, емісія `settings:changed`) —
+  НЕ через канал, бо пауза/відновлення мають працювати й коли рушій зупинено.
+  Решта дій (`RevertLast`/`ManualSwitch`/`CaseUpper|Lower|Sentence`) → команда в
+  потік рушія через `RuntimeManager::send_command` (див. нижче).
+
+### Командний канал рушія (`runtime.rs`) — НЕОЧЕВИДНЕ
+**Чому канал, а не прямий виклик core-API з хендлера:** рушій крутиться в ОКРЕМОМУ
+потоці (`engine_loop`) і ВОЛОДІЄ `EngineState` + `WindowsPlatform` (хуки/ввід).
+Хоткей-хендлер (потік Tauri) не має до них доступу й не сміє їх шарити між потоками.
+- `enum EngineCommand { RevertLast, ManualSwitch, ApplyCase(CaseMode) }` (крос-платформний).
+- `start_engine` створює `mpsc::channel`; `EngineHandle` тримає `tx`, потік отримує `rx`.
+- `engine_loop` на КОЖНІЙ ітерації спершу **неблокуюче** поллить `cmd_rx.try_recv()`
+  (пріоритет над input-подіями), виконує команду на СВОЇХ `state`+`platform`, далі
+  `continue`. Так доступ до стану серіалізовано (хоткеї й ввід не конкурують).
+  - `RevertLast` → `revert_last(&mut state)` → `apply_actions` (із персистом `CommitException`).
+  - `ManualSwitch` → будує `Context` (як звичайний крок) → `force_switch_last(&mut state, &ctx)` → apply.
+  - `ApplyCase(mode)` → `get_selection_text()` (синтет. Ctrl+C, відновлює clipboard) →
+    `transform_case(&text, mode)`; якщо змінилось → `apply(TypeUnicode(out))` (друк
+    поверх виділення замінює його; `DeleteChars` не потрібен — НЕ перевірено живцем
+    у всіх полях, потенційна готча).
+- `RuntimeManager::send_command(cmd) -> bool`: `false`, якщо рушій НЕ запущено
+  (пауза/`enabled=false`) → хоткей-дія тихо ігнорується (revert/manual/case без
+  активного движка не мають сенсу). На не-Windows завжди `false` (заглушка).
+- `apply_actions` — локальний хелпер у `engine_loop`: платформа йде ПАРАМЕТРОМ
+  (не захоплюється), щоб не конфліктувати по борроу з основним циклом.
 - **UI-картка «Гарячі клавіші»** (`App.svelte`): рядок на дію — чекбокс `enabled` +
   поле акселератора. Поле захоплює комбінацію по `onkeydown` (`accelFromEvent` →
   `Ctrl+Alt+P`; Backspace/Delete — очистити), але лишається й текстово редагованим.

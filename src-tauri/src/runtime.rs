@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use typofix_core::{
-    DetectorConfig, ExclusionRules, FrequencyMap, LanguageProfile, LayoutId, WordRules,
+    CaseMode, DetectorConfig, ExclusionRules, FrequencyMap, LanguageProfile, LayoutId, WordRules,
 };
 
 use crate::config::{AppSettings, LanguagePair, WordsDto};
@@ -249,6 +249,23 @@ pub fn append_learned(path: &Path, word: &str) -> std::io::Result<()> {
 // Менеджер рантайму: старт/стоп потоку рушія
 // ===========================================================================
 
+/// Команда від хоткей-хендлера (потік Tauri) до потоку рушія (B1).
+///
+/// **Чому канал, а не прямий виклик:** рушій крутиться в ОКРЕМОМУ потоці
+/// ([`engine_loop`]) і ВОЛОДІЄ `EngineState` + платформою (хуки/ввід). Хоткей-
+/// хендлер у потоці Tauri не має до них доступу й не сміє їх шарити. Тож він
+/// лише шле команду каналом, а виконує її рушій на СВОЇХ state+платформі —
+/// поряд із input-подіями, тим самим серіалізуючи доступ до стану.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineCommand {
+    /// Скасувати останнє авто-перемикання (повернути оригінал + завчити слово).
+    RevertLast,
+    /// Примусово перемкнути розкладку останнього слова (ігнорує поріг).
+    ManualSwitch,
+    /// Застосувати регістр до поточного виділення ОС.
+    ApplyCase(CaseMode),
+}
+
 /// Керує життєвим циклом потоку рушія. Зберігається у Tauri-стані за `Mutex`.
 #[derive(Default)]
 pub struct RuntimeManager {
@@ -275,6 +292,25 @@ impl RuntimeManager {
     /// Зупинити рушій (при виході із застосунку).
     pub fn shutdown(&mut self) {
         self.stop_engine();
+    }
+
+    /// Надіслати команду активному рушієві. Повертає `false`, якщо рушій НЕ
+    /// запущено (пауза/`enabled=false`) — тоді хоткей-дія просто ігнорується
+    /// (revert/manual/case не мають сенсу без активного движка). Пауза-toggle
+    /// іде окремим шляхом ([`crate::toggle_enabled`]), не через цей канал.
+    pub fn send_command(&self, cmd: EngineCommand) -> bool {
+        #[cfg(windows)]
+        {
+            if let Some(handle) = &self.engine {
+                return handle.tx.send(cmd).is_ok();
+            }
+            false
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = cmd;
+            false
+        }
     }
 
     #[cfg(windows)]
@@ -304,11 +340,14 @@ impl RuntimeManager {
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
+        // Канал команд від хоткеїв: хендлер шле, рушій поллить у своєму циклі.
+        let (tx, cmd_rx) = std::sync::mpsc::channel::<EngineCommand>();
         let thread = std::thread::Builder::new()
             .name("typofix-engine".to_string())
             .spawn(move || {
                 engine_loop(
                     stop_for_thread,
+                    cmd_rx,
                     exclusions,
                     config,
                     languages,
@@ -319,7 +358,7 @@ impl RuntimeManager {
             })
             .map_err(|e| format!("не вдалося запустити потік рушія: {e}"))?;
 
-        self.engine = Some(EngineHandle { stop, thread });
+        self.engine = Some(EngineHandle { stop, tx, thread });
         Ok(())
     }
 
@@ -335,10 +374,11 @@ impl RuntimeManager {
     }
 }
 
-/// Хендл живого потоку рушія: прапорець зупинки + сам потік.
+/// Хендл живого потоку рушія: прапорець зупинки + канал команд + сам потік.
 #[cfg(windows)]
 struct EngineHandle {
     stop: Arc<AtomicBool>,
+    tx: std::sync::mpsc::Sender<EngineCommand>,
     thread: std::thread::JoinHandle<()>,
 }
 
@@ -351,10 +391,15 @@ impl EngineHandle {
     }
 }
 
-/// Тіло потоку рушія: тягне події з платформи, проганяє через ядро, застосовує дії.
+/// Тіло потоку рушія: тягне події з платформи й команди з хоткей-каналу,
+/// проганяє через ядро, застосовує дії на власних `state`+платформі.
+// Приватна точка входу потоку: усі аргументи — owned-дані, передані один раз при
+// старті (group у struct лише задля ліку аргументів не вартий зайвого типу).
 #[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
 fn engine_loop(
     stop: Arc<AtomicBool>,
+    cmd_rx: std::sync::mpsc::Receiver<EngineCommand>,
     exclusions: ExclusionRules,
     config: DetectorConfig,
     languages: Vec<LanguageProfile>,
@@ -362,11 +407,14 @@ fn engine_loop(
     seed: Vec<String>,
     learned_path: PathBuf,
 ) {
+    use std::sync::mpsc::TryRecvError;
     use std::time::Duration;
 
-    use typofix_core::{step, Action, Context, EngineState};
+    use typofix_core::{
+        force_switch_last, revert_last, step, transform_case, Action, Context, EngineState,
+    };
     use typofix_platform::Platform;
-    use typofix_platform_windows::WindowsPlatform;
+    use typofix_platform_windows::{get_selection_text, WindowsPlatform};
 
     // ⚠️ Ставить системні хуки на весь час життя потоку.
     let mut platform = WindowsPlatform::new();
@@ -376,9 +424,63 @@ fn engine_loop(
         state.learned.learn(word);
     }
     // `rules` несе whitelist коротких службових слів, особистий словник
-    // (recognized) і per-word veto з налаштувань (force ще не в конфігу).
+    // (recognized) і per-word veto з налаштувань.
+
+    // Застосувати набір дій + персист самонавчання (спільне для step і команд).
+    // Платформа приходить параметром (не захоплюється) → без конфлікту борроу
+    // з основним циклом, що теж позичає `platform`.
+    let apply_actions = |platform: &mut WindowsPlatform, actions: &[Action]| {
+        for action in actions {
+            // Самонавчання персистимо тут (ядро лишається чистим).
+            if let Action::CommitException(word) = action {
+                if let Err(e) = append_learned(&learned_path, word) {
+                    eprintln!("TypoFix: не вдалося зберегти навчене слово: {e}");
+                }
+            }
+            platform.apply(action);
+        }
+    };
 
     while !stop.load(Ordering::SeqCst) {
+        // 1) Команди від хоткеїв мають пріоритет і обробляються неблокуюче.
+        match cmd_rx.try_recv() {
+            Ok(EngineCommand::RevertLast) => {
+                let actions = revert_last(&mut state);
+                apply_actions(&mut platform, &actions);
+                continue;
+            }
+            Ok(EngineCommand::ManualSwitch) => {
+                let ctx = Context {
+                    active_window: platform.active_window(),
+                    current_layout: platform.current_layout(),
+                    languages: &languages,
+                    config,
+                    exclusions: &exclusions,
+                    rules: &rules,
+                };
+                let actions = force_switch_last(&mut state, &ctx);
+                apply_actions(&mut platform, &actions);
+                continue;
+            }
+            Ok(EngineCommand::ApplyCase(mode)) => {
+                // Виділення приходить ЗЗОВНІ (синтет. Ctrl+C), не з буфера натисків.
+                if let Some(text) = get_selection_text() {
+                    let out = transform_case(&text, mode);
+                    if out != text {
+                        // Друк поверх виділення замінює його (поле затирає виділене
+                        // вводом) — `DeleteChars` не потрібен. Якщо в якомусь полі
+                        // виділення не затирається вводом — ловитимемо живим прогоном.
+                        platform.apply(&Action::TypeUnicode(out));
+                    }
+                }
+                continue;
+            }
+            Err(TryRecvError::Empty) => {}
+            // Усі sender'и впали (EngineHandle дропнуто без stop) — виходимо.
+            Err(TryRecvError::Disconnected) => break,
+        }
+
+        // 2) Вхідні події.
         let Some(event) = platform.try_next_event() else {
             // Канал порожній — коротка пауза, щоб не крутити CPU вхолосту.
             std::thread::sleep(Duration::from_millis(2));
@@ -395,15 +497,7 @@ fn engine_loop(
         };
 
         let actions = step(&mut state, event, &ctx);
-        for action in &actions {
-            // Самонавчання персистимо тут (ядро лишається чистим).
-            if let Action::CommitException(word) = action {
-                if let Err(e) = append_learned(&learned_path, word) {
-                    eprintln!("TypoFix: не вдалося зберегти навчене слово: {e}");
-                }
-            }
-            platform.apply(action);
-        }
+        apply_actions(&mut platform, &actions);
     }
     // Вихід із циклу → drop(platform) знімає хуки.
 }
@@ -420,6 +514,17 @@ mod tests {
             detection,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn send_command_without_engine_is_ignored() {
+        // Без активного рушія (пауза/вимкнено) команди тихо ігноруються —
+        // `send_command` повертає false, а не панікує/блокує. Крос-платформно
+        // (на не-Windows завжди false; на Windows engine=None → false).
+        let mgr = RuntimeManager::default();
+        assert!(!mgr.send_command(EngineCommand::RevertLast));
+        assert!(!mgr.send_command(EngineCommand::ManualSwitch));
+        assert!(!mgr.send_command(EngineCommand::ApplyCase(CaseMode::Sentence)));
     }
 
     #[test]

@@ -81,7 +81,7 @@ const messages = {
     "hotkeys.accel.placeholder": "напр. Ctrl+Alt+P",
     "hotkeys.enabled.aria": "Увімкнути цей хоткей",
     "hotkeys.note":
-      "Поки що працює лише «Пауза / відновлення». Решта комбінацій під'єднаються найближчим оновленням.",
+      "Дії з виділенням (регістр, ручне перемикання) працюють лише коли TypoFix активний (не на паузі).",
 
     // Advanced
     "section.detection.title": "Поріг впевненості (advanced)",

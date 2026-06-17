@@ -10,11 +10,14 @@
 //! - Хоткеї живуть незалежно від `enabled` (пауза/активний): інакше не можна було б
 //!   ВІДНОВИТИ роботу з клавіатури. Пауза — це окрема дія двигуна, не зняття хоткеїв.
 //!
-//! ## Цей крок (B1, ітерація 1)
-//! Під'єднано лише [`HotkeyAction::PauseResume`] → той самий toggle, що й трей-пункт.
-//! Решта дій РЕЄСТРУЮТЬСЯ (займають комбінацію, логуються при натиску), але їхній
-//! роутинг — заглушка з `TODO`: revert/manual/case прийдуть наступною ітерацією,
-//! коли Den віддасть core-API (`revert_last`/`force_switch_last`/`transform_case`).
+//! ## Роутинг дій
+//! - `PauseResume` → [`crate::toggle_enabled`] (інверсія `enabled`; пауза/відновлення
+//!   не потребують активного рушія, тож ідуть прямо, не через канал).
+//! - `RevertLast` / `ManualSwitch` / `CaseUpper`/`Lower`/`Sentence` → команда в
+//!   потік рушія через [`RuntimeManager::send_command`] (`EngineCommand`). Рушій
+//!   виконує її на своїх `EngineState`+платформі (хендлер не має до них доступу).
+//!   Якщо рушій НЕ активний (пауза/`enabled=false`) — `send_command` повертає
+//!   `false`, дія тихо ігнорується (revert/manual/case без движка не мають сенсу).
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -22,8 +25,10 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use typofix_core::CaseMode;
 
 use crate::config::{AppSettings, HotkeyAction};
+use crate::runtime::{EngineCommand, RuntimeManager};
 
 /// Реєстр активних хоткеїв: відображення зареєстрованого `Shortcut` → дія.
 /// Тримається в Tauri-стані за `Mutex`; handler плагіна шукає тут дію за тим
@@ -91,18 +96,31 @@ pub fn apply(app: &AppHandle, settings: &AppSettings) {
     }
 }
 
-/// Виконати дію, прив'язану до хоткея. Цієї ітерації під'єднано лише паузу.
+/// Виконати дію, прив'язану до хоткея.
 fn route(app: &AppHandle, action: HotkeyAction) {
     match action {
         // Та сама логіка, що й трей-пункт «Пауза/Відновити»: інвертує `enabled`,
-        // пише на диск, оновлює трей і емітить `settings:changed`.
+        // пише на диск, оновлює трей і емітить `settings:changed`. Не через канал —
+        // пауза має працювати й коли рушій зупинено (щоб ВІДНОВИТИ роботу).
         HotkeyAction::PauseResume => crate::toggle_enabled(app),
-        // TODO(B1, наступна ітерація): під'єднати через RuntimeManager + core-API:
-        //   RevertLast    → revert_last(&mut EngineState)
-        //   ManualSwitch  → force_switch_last(&mut EngineState, &Context)
-        //   Case{Upper,Lower,Sentence} → transform_case(&str, CaseMode) (clipboard round-trip)
-        other => {
-            println!("TypoFix: хоткей {other:?} поки не під'єднано (заглушка)");
-        }
+        // Решта — команда в потік рушія (він володіє state+платформою).
+        HotkeyAction::RevertLast => send(app, EngineCommand::RevertLast),
+        HotkeyAction::ManualSwitch => send(app, EngineCommand::ManualSwitch),
+        HotkeyAction::CaseUpper => send(app, EngineCommand::ApplyCase(CaseMode::Upper)),
+        HotkeyAction::CaseLower => send(app, EngineCommand::ApplyCase(CaseMode::Lower)),
+        HotkeyAction::CaseSentence => send(app, EngineCommand::ApplyCase(CaseMode::Sentence)),
+    }
+}
+
+/// Надіслати команду рушієві. Якщо рушій не активний (пауза/вимкнено) —
+/// `send_command` повертає `false`, дію тихо ігноруємо (лише лог у stdout).
+fn send(app: &AppHandle, cmd: EngineCommand) {
+    let manager = app.state::<Mutex<RuntimeManager>>();
+    let sent = manager
+        .lock()
+        .expect("RuntimeManager отруєно")
+        .send_command(cmd);
+    if !sent {
+        println!("TypoFix: {cmd:?} проігноровано — рушій не активний (пауза/вимкнено)");
     }
 }

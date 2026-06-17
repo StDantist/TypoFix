@@ -68,6 +68,14 @@ const messages = {
     "words.add.always": "Додати слово",
     "words.add.never": "Додати слово",
 
+    // Системне (B5): автозапуск
+    "section.system.title": "Системне",
+    "section.system.desc": "Інтеграція з операційною системою.",
+    "system.autostart": "Запускати разом із Windows",
+    "system.autostart.hint":
+      "TypoFix запускатиметься автоматично при вході в систему (згорнутий у трей).",
+    "system.autostart.error": "Не вдалося змінити автозапуск",
+
     // Звук і сповіщення (B2)
     "section.feedback.title": "Звук і сповіщення",
     "section.feedback.desc": "Як TypoFix підтверджує виправлення.",

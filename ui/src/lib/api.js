@@ -82,6 +82,23 @@ export function listRunningProcesses() {
   return invoke("list_running_processes");
 }
 
+/**
+ * Чи увімкнено автозапуск разом із Windows (читає плагін — реєстр, джерело істини).
+ * @returns {Promise<boolean>}
+ */
+export function getAutostart() {
+  return invoke("get_autostart");
+}
+
+/**
+ * Увімкнути/вимкнути автозапуск. Повертає ФАКТИЧНИЙ стан після зміни.
+ * @param {boolean} enabled
+ * @returns {Promise<boolean>}
+ */
+export function setAutostart(enabled) {
+  return invoke("set_autostart", { enabled });
+}
+
 /** Діалог вибору теки. @returns {Promise<string|null>} */
 export async function pickFolder() {
   const res = await open({ directory: true, multiple: false });

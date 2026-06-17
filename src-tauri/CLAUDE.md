@@ -52,7 +52,7 @@ npm --prefix ui install
 
 ## Поведінка скелета
 - Трей-меню: статус (активний/пауза, disabled-індикатор), Пауза/Відновити (toggle),
-  Відкрити налаштування, Автозапуск (TODO-заглушка), Вихід.
+  Відкрити налаштування, Автозапуск (CheckMenuItem з галочкою — стан із реєстру), Вихід.
 - Лівий клік по іконці трею → відкрити налаштування.
 - Вікно налаштувань стартує прихованим (`visible: false` у conf); закриття вікна
   його **ховає** (`api.prevent_close()` + `hide()`), а не закриває застосунок.
@@ -228,6 +228,35 @@ npm --prefix ui install
 - **`RuntimeManager::apply`/`start_engine` тепер беруть `&AppHandle`** (для клону в потік).
   Єдиний кличе — `lib.rs::sync_runtime`. `live_engine.rs` свій цикл, `apply` не зачіпає.
 
+## Автозапуск із Windows (B5) — `tauri-plugin-autostart`
+- **Плагін:** `tauri-plugin-autostart` v2. Реєструється у `run()`:
+  `tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None::<Vec<&str>>)`.
+  Args=None — застосунок і так стартує прихованим у трей (окремий `--minimized` не
+  потрібен). На Windows керує Run-ключем реєстру; macOS — LaunchAgent.
+- **ДЖЕРЕЛО ІСТИНИ — сам плагін (реєстр), НЕ `settings.json`.** Стан автозапуску
+  навмисно НЕ дублюємо в конфігу, щоб він не розійшовся з реальним записом реєстру.
+  UI при відкритті читає `get_autostart` (= `app.autolaunch().is_enabled()`).
+- **Дозволи (capabilities):** `autostart:allow-enable / -disable / -is-enabled` у
+  `capabilities/default.json` (без них `invoke` падає в рантаймі).
+- **Команди (`lib.rs`):** `get_autostart() -> bool` (читає плагін),
+  `set_autostart(enabled: bool) -> bool` (enable/disable через `AutoLaunchManager`,
+  оновлює трей, повертає ПЕРЕЧИТАНИЙ фактичний стан — не «бажаний»). Обгортки в
+  `api.js`: `getAutostart`/`setAutostart`. i18n — `system.*`.
+- **Трей-пункт `MENU_AUTOSTART`:** `CheckMenuItem` (галочка = `is_enabled()`), по
+  кліку `toggle_autostart` → enable/disable, `refresh_tray`, емісія `autostart:changed`
+  (payload `bool`). `build_tray_menu` щоразу перечитує `is_enabled()` (помилка → знято).
+- **Синхрон трей↔UI↔реєстр:** три точки правлять одне (реєстр):
+  - UI-toggle → `setAutostart` (через `$effect` з guard `autostartApplied`, щоб не
+    спрацьовувати на завантаженні/синку з трею) → плагін → `refresh_tray` оновлює галочку.
+  - Трей-пункт → `toggle_autostart` → плагін + емісія `autostart:changed` → App слухає,
+    оновлює чекбокс БЕЗ повторного запису (виставляє `autostartApplied` = payload першим).
+  - Відкриття вікна → `getAutostart` читає реєстр як стартове значення.
+  UI-стан автозапуску ОКРЕМИЙ від `settings`/`dirty` (Save його не чіпає — застосовується
+  миттєво при перемиканні).
+- **Single-instance:** плагіна `tauri-plugin-single-instance` у проєкті НЕМАЄ (не
+  додавали в межах B5). Автозапуск сам подвійного інстансу не плодить (один Run-запис),
+  але захист від ручного повторного запуску відсутній — окрема задача.
+
 ## Рантайм-цикл рушія (`runtime.rs`) — серце Фази 5
 Зв'язує живу платформу (Windows-хук) із чистим ядром.
 - **`RuntimeManager`** (Tauri-стан за `Mutex`) керує життям потоку `typofix-engine`.
@@ -321,5 +350,7 @@ cargo run -p typofix-app --bin live_engine
 дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,
 events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/теки —
 плагін `tauri-plugin-dialog`), `global-shortcut:allow-register/-unregister/-unregister-all/-is-registered`
-(плагін `tauri-plugin-global-shortcut`). Власні app-команди (`load_settings`/`save_settings`)
-працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.
+(плагін `tauri-plugin-global-shortcut`), `autostart:allow-enable/-disable/-is-enabled`
+(плагін `tauri-plugin-autostart`, B5). Власні app-команди (`load_settings`/`save_settings`/
+`get_autostart`/`set_autostart`) працюють у межах `core:default`. Додаєш плагін → додай
+його permission сюди.

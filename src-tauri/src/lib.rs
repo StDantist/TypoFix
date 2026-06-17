@@ -14,10 +14,11 @@ use std::sync::Mutex;
 
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State, WindowEvent, Wry,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use config::AppSettings;
 use runtime::RuntimeManager;
@@ -45,6 +46,12 @@ const SETTINGS_WINDOW: &str = "settings";
 /// Подія до фронтенду: конфіг змінився ззовні форми (напр. toggle у треї).
 /// Вікно налаштувань слухає й оновлює перемикач «Увімкнено».
 const EVENT_SETTINGS_CHANGED: &str = "settings:changed";
+
+/// Подія до фронтенду: стан автозапуску змінився ззовні форми (toggle у треї).
+/// Payload — `bool` (увімкнено). Вікно слухає й оновлює перемикач «Автозапуск».
+/// Окрема від `settings:changed`, бо автозапуск НЕ в `settings.json` — джерело
+/// істини сам плагін (реєстр/LaunchAgent), тож синхронізуємо його окремо.
+const EVENT_AUTOSTART_CHANGED: &str = "autostart:changed";
 
 // Ідентифікатори пунктів меню.
 const MENU_STATUS: &str = "status";
@@ -88,12 +95,15 @@ fn build_tray_menu(app: &AppHandle, enabled: bool) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?;
 
-    // TODO(autostart): реальний toggle через tauri-plugin-autostart.
-    let autostart = MenuItem::with_id(
+    // Автозапуск: галочка = реальний стан плагіна (реєстр/LaunchAgent).
+    // Помилка читання → знято (не валимо меню). По кліку — toggle_autostart.
+    let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart = CheckMenuItem::with_id(
         app,
         MENU_AUTOSTART,
-        "Автозапуск при вході (TODO)",
+        "Запускати разом із Windows",
         true,
+        autostart_on,
         None::<&str>,
     )?;
 
@@ -274,6 +284,50 @@ pub(crate) fn toggle_enabled(app: &AppHandle) {
     sync_runtime(app, &snapshot);
     // Сповіщаємо фронтенд (повним конфігом — вікно вирішить, що оновити).
     let _ = app.emit(EVENT_SETTINGS_CHANGED, snapshot);
+}
+
+/// Поточний прапорець «увімкнено» (для оновлення трею, коли під рукою лише `app`).
+fn current_enabled(app: &AppHandle) -> bool {
+    app.state::<AppState>()
+        .settings
+        .lock()
+        .expect("AppState отруєно")
+        .enabled
+}
+
+/// Перемкнути автозапуск із трею: enable/disable через плагін, оновити галочку
+/// в меню й сповістити вікно налаштувань. Стан читаємо назад із плагіна (реєстр —
+/// джерело істини), тож меню/UI завжди показують реальний стан, а не «бажаний».
+fn toggle_autostart(app: &AppHandle) {
+    let mgr = app.autolaunch();
+    let now = mgr.is_enabled().unwrap_or(false);
+    let res = if now { mgr.disable() } else { mgr.enable() };
+    if let Err(err) = res {
+        eprintln!("TypoFix: не вдалося змінити автозапуск: {err}");
+        return;
+    }
+    // Перечитуємо фактичний стан (а не припускаємо !now) — реєстр джерело істини.
+    let actual = mgr.is_enabled().unwrap_or(!now);
+    refresh_tray(app, current_enabled(app));
+    let _ = app.emit(EVENT_AUTOSTART_CHANGED, actual);
+}
+
+/// Команда: чи увімкнено автозапуск (читає плагін — реєстр/LaunchAgent).
+/// Вікно налаштувань кличе при відкритті, щоб показати реальний стан.
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Команда: увімкнути/вимкнути автозапуск. Пише через плагін, оновлює галочку в
+/// треї й повертає ФАКТИЧНИЙ стан (перечитаний із плагіна — джерела істини).
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let mgr = app.autolaunch();
+    if enabled { mgr.enable() } else { mgr.disable() }.map_err(|e| e.to_string())?;
+    let actual = mgr.is_enabled().map_err(|e| e.to_string())?;
+    refresh_tray(&app, current_enabled(&app));
+    Ok(actual)
 }
 
 /// Один запис у списку запущених процесів для пікера виключень.
@@ -648,13 +702,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(hotkeys::plugin())
+        // Автозапуск (B5). Args=None: застосунок і так стартує прихованим у трей,
+        // окремих launch-аргументів не потребує. macOS — через LaunchAgent.
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None::<Vec<&str>>,
+        ))
         .manage(AppState::default())
         .manage(Mutex::new(RuntimeManager::default()))
         .manage(hotkeys::HotkeyRegistry::default())
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
-            list_running_processes
+            list_running_processes,
+            get_autostart,
+            set_autostart
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -725,9 +787,7 @@ pub fn run() {
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_TOGGLE => toggle_enabled(app),
             MENU_SETTINGS => show_settings(app),
-            MENU_AUTOSTART => {
-                // TODO(autostart): під'єднати tauri-plugin-autostart enable/disable.
-            }
+            MENU_AUTOSTART => toggle_autostart(app),
             MENU_QUIT => {
                 // Коректно знімаємо хуки перед виходом.
                 app.state::<Mutex<RuntimeManager>>()

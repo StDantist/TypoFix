@@ -7,6 +7,8 @@
     saveSettings,
     pickExe,
     pickFolder,
+    getAutostart,
+    setAutostart,
   } from "./lib/api.js";
   import Toggle from "./lib/Toggle.svelte";
   import RuleList from "./lib/RuleList.svelte";
@@ -98,6 +100,31 @@
   let statusKey = $state("");
   let statusDetail = $state("");
 
+  // Автозапуск (B5). НЕ частина settings.json — джерело істини сам плагін (реєстр).
+  // `applied` = останнє значення, надіслане в бекенд: guard, щоб $effect не
+  // викликав setAutostart на початкове завантаження чи на оновлення з трею.
+  let autostart = $state(false);
+  let autostartApplied = $state(false);
+  let autostartError = $state(false);
+
+  $effect(() => {
+    const want = autostart;
+    if (want === autostartApplied) return; // ініціалізація / синк із трею — не реагуємо
+    autostartApplied = want;
+    setAutostart(want)
+      .then((actual) => {
+        autostartError = false;
+        // Узгоджуємо з фактичним станом плагіна (раптом enable/disable не вдалось).
+        if (actual !== want) {
+          autostartApplied = actual;
+          autostart = actual;
+        }
+      })
+      .catch(() => {
+        autostartError = true;
+      });
+  });
+
   const dirty = $derived(JSON.stringify(settings) !== baseline);
 
   // Людська «чутливість» поверх технічного `confidence_threshold`.
@@ -139,6 +166,13 @@
 
   onMount(() => {
     reload();
+    // Стан автозапуску читаємо з плагіна (реєстр — джерело істини), не з конфігу.
+    getAutostart()
+      .then((on) => {
+        autostartApplied = on; // спершу applied, щоб $effect не «застосовував» назад
+        autostart = on;
+      })
+      .catch(() => {});
     // Трей може змінити «увімкнено» поза формою — синхронізуємо перемикач,
     // не чіпаючи решту (можливих незбережених) правок.
     const unlisten = listen("settings:changed", (event) => {
@@ -151,8 +185,18 @@
         baseline = JSON.stringify(b);
       }
     });
+    // Трей може перемкнути автозапуск — синхронізуємо чекбокс БЕЗ повторного запису
+    // (спершу applied = payload, тож $effect побачить рівність і не викличе бекенд).
+    const unlistenAutostart = listen("autostart:changed", (event) => {
+      const on = /** @type {any} */ (event.payload);
+      if (typeof on === "boolean") {
+        autostartApplied = on;
+        autostart = on;
+      }
+    });
     return () => {
       unlisten.then((fn) => fn());
+      unlistenAutostart.then((fn) => fn());
     };
   });
 
@@ -362,6 +406,19 @@
       </div>
       <p class="desc">{$t("behavior.sensitivity.hint")}</p>
     </div>
+  </section>
+
+  <!-- Системне (B5): автозапуск разом із Windows -->
+  <section class="card">
+    <h2>{$t("section.system.title")}</h2>
+    <p class="desc">{$t("section.system.desc")}</p>
+    <div class="behavior-row">
+      <Toggle bind:checked={autostart} label={$t("system.autostart")} />
+      <span class="hint">{$t("system.autostart.hint")}</span>
+    </div>
+    {#if autostartError}
+      <p class="err">{$t("system.autostart.error")}</p>
+    {/if}
   </section>
 
   <!-- Звук і сповіщення (B2) -->
@@ -700,6 +757,12 @@
   }
   .status .err {
     color: #d9534f;
+  }
+
+  .card .err {
+    margin: 0.6rem 0 0;
+    color: #d9534f;
+    font-size: 0.85rem;
   }
   .status .dim {
     color: var(--text-dim);

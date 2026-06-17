@@ -36,9 +36,21 @@ const messages = {
     "exclusions.empty": "Порожньо",
     "exclusions.process.placeholder": "напр. game.exe",
     "exclusions.add.process": "Додати процес",
+    "exclusions.add.fromRunning": "Обрати із запущених…",
     "exclusions.add.exe": "Додати .exe…",
     "exclusions.add.folder": "Додати теку…",
     "exclusions.remove": "Видалити",
+
+    // Пікер запущених процесів
+    "picker.title": "Запущені процеси",
+    "picker.filter.placeholder": "Пошук за іменем або шляхом…",
+    "picker.refresh": "Оновити список",
+    "picker.loading": "Завантаження списку процесів…",
+    "picker.none": "Нічого не знайдено",
+    "picker.error": "Не вдалося отримати список процесів",
+    "picker.added": "додано",
+    "picker.close": "Закрити",
+    "picker.done": "Готово",
 
     // Слова-винятки (особистий словник)
     "section.words.title": "Слова-винятки",

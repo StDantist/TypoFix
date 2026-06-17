@@ -189,6 +189,62 @@ fn toggle_enabled(app: &AppHandle) {
     let _ = app.emit(EVENT_SETTINGS_CHANGED, snapshot);
 }
 
+/// Один запис у списку запущених процесів для пікера виключень.
+/// `name` — exe-ім'я (напр. `chrome.exe`), `exe_path` — повний шлях, якщо доступний.
+/// Приватність: лише імена/шляхи процесів, локально; нічого не зберігаємо й не шлемо.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ProcessEntry {
+    name: String,
+    exe_path: Option<String>,
+}
+
+/// Команда: перелік ЗАРАЗ ЗАПУЩЕНИХ процесів, **дедуплікований за exe-іменем**
+/// (один запис на застосунок, не на кожен PID), відсортований за іменем.
+/// Працює в межах `core:default` (як `load_settings`) — нового permission не треба.
+#[tauri::command]
+fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
+    use std::collections::HashMap;
+
+    use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+
+    // Оновлюємо ЛИШЕ процеси (без CPU/RAM/дисків) — дешевше й точно під задачу.
+    let sys = System::new_with_specifics(
+        RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing()),
+    );
+
+    // Дедуп за нормалізованим (lowercase) exe-іменем. Якщо в одного імені кілька
+    // PID-ів — лишаємо перший, але «доповнюємо» шляхом, якщо раніше його не було.
+    let mut by_name: HashMap<String, ProcessEntry> = HashMap::new();
+    for proc in sys.processes().values() {
+        // Канонічне exe-ім'я: беремо з file_name шляху (повне, із розширенням),
+        // інакше — name() (на Windows це вже повне ім'я процесу).
+        let exe_path = proc.exe().map(|p| p.to_string_lossy().into_owned());
+        let name = proc
+            .exe()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| proc.name().to_string_lossy().into_owned());
+        if name.is_empty() {
+            continue;
+        }
+
+        let key = name.to_lowercase();
+        by_name
+            .entry(key)
+            .and_modify(|e| {
+                if e.exe_path.is_none() {
+                    e.exe_path = exe_path.clone();
+                }
+            })
+            .or_insert(ProcessEntry { name, exe_path });
+    }
+
+    let mut entries: Vec<ProcessEntry> = by_name.into_values().collect();
+    // Стабільний, передбачуваний порядок для UI (регістронезалежно за іменем).
+    entries.sort_by_key(|a| a.name.to_lowercase());
+    Ok(entries)
+}
+
 /// Команда: прочитати конфіг із диска (джерело істини) й оновити in-memory.
 #[tauri::command]
 fn load_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, String> {
@@ -220,7 +276,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(Mutex::new(RuntimeManager::default()))
-        .invoke_handler(tauri::generate_handler![load_settings, save_settings])
+        .invoke_handler(tauri::generate_handler![
+            load_settings,
+            save_settings,
+            list_running_processes
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -297,4 +357,33 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("помилка під час запуску TypoFix");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_running_processes_returns_deduped_sorted_nonempty() {
+        // Не потребує GUI/хуків — лише читає таблицю процесів ОС.
+        let list = list_running_processes().expect("перелік процесів");
+        // Цей тест-процес сам запущений → список не порожній.
+        assert!(!list.is_empty(), "очікували хоча б один процес");
+
+        // Дедуп за exe-іменем (регістронезалежно): без повторів.
+        let mut keys: Vec<String> = list.iter().map(|p| p.name.to_lowercase()).collect();
+        let before = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(before, keys.len(), "імена мають бути унікальні (дедуп)");
+
+        // Відсортовано за іменем (регістронезалежно).
+        let names: Vec<String> = list.iter().map(|p| p.name.to_lowercase()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "список має бути відсортований за іменем");
+
+        // Жодного порожнього імені.
+        assert!(list.iter().all(|p| !p.name.is_empty()));
+    }
 }

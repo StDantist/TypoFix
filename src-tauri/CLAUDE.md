@@ -83,6 +83,20 @@ npm --prefix ui install
 - **Команди:** `load_settings` (диск → in-memory + повертає форму),
   `save_settings(settings)` (валідує `sanitized()`, пише, оновлює трей, повертає
   очищене). Диск — джерело істини; `AppState.settings` — синхронізована копія.
+- **`list_running_processes() -> Vec<ProcessEntry>`** (`lib.rs`): перелік ЗАРАЗ
+  запущених процесів для пікера виключень. `ProcessEntry { name, exe_path: Option }`.
+  **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок, не на PID),
+  сортовано за іменем. Через `sysinfo` (default-features off, лише `system`;
+  оновлюємо ТІЛЬКИ процеси — без CPU/RAM/дисків). `name` = file_name з exe-шляху
+  (повне `chrome.exe`), fallback `process.name()`. Приватність: лише імена/шляхи,
+  локально, нічого не пишемо/не шлемо. Власна app-команда → працює в межах
+  `core:default`, **новий permission НЕ потрібен** (як `load_settings`). Тестовно
+  без GUI/хуків: юніт `list_running_processes_returns_deduped_sorted_nonempty`.
+- **UI-пікер процесів** (`ui/src/lib/ProcessPicker.svelte`): модалка з полем-фільтром
+  (пошук за іменем/шляхом), кнопкою «Оновити список», закриттям по Esc / кліку поза
+  вмістом. Клік по запису → `onpick(name)` → `addUnique(process_names)` (можна додати
+  кілька й закрити; уже додані позначені й disabled). Кнопка «Обрати із запущених…»
+  у картці «Виключення». IPC-обгортка — `api.js::listRunningProcesses`.
 - **Синхрон трей↔вікно:** toggle у треї змінює `enabled`, пише на диск і емітить
   подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
   `enabled`, не чіпаючи можливих незбережених правок у формі.

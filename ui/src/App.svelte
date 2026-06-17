@@ -10,6 +10,7 @@
   } from "./lib/api.js";
   import Toggle from "./lib/Toggle.svelte";
   import RuleList from "./lib/RuleList.svelte";
+  import ProcessPicker from "./lib/ProcessPicker.svelte";
 
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
@@ -29,6 +30,8 @@
   let processInput = $state("");
   let alwaysWordInput = $state("");
   let neverWordInput = $state("");
+  /** Чи показано модалку-пікер запущених процесів. */
+  let showProcessPicker = $state(false);
   /** @type {"" | "saved" | "saveError" | "loadError"} */
   let statusKey = $state("");
   let statusDetail = $state("");
@@ -160,6 +163,9 @@
           {$t("exclusions.add.process")}
         </button>
       </form>
+      <button type="button" onclick={() => (showProcessPicker = true)}>
+        {$t("exclusions.add.fromRunning")}
+      </button>
       <button type="button" onclick={addExe}>{$t("exclusions.add.exe")}</button>
       <button type="button" onclick={addFolder}>{$t("exclusions.add.folder")}</button>
     </div>
@@ -295,6 +301,14 @@
 
   <p class="privacy-note">{$t("footer.note")}</p>
 </main>
+
+{#if showProcessPicker}
+  <ProcessPicker
+    added={settings.exclusions.process_names}
+    onpick={(name) => addUnique(settings.exclusions.process_names, name)}
+    onclose={() => (showProcessPicker = false)}
+  />
+{/if}
 
 <style>
   main {

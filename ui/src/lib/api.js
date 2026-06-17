@@ -36,6 +36,20 @@ export function saveSettings(settings) {
   return invoke("save_settings", { settings });
 }
 
+/**
+ * @typedef {Object} ProcessEntry
+ * @property {string} name      exe-ім'я, напр. "chrome.exe"
+ * @property {string|null} exe_path повний шлях, якщо доступний
+ */
+
+/**
+ * Перелік зараз запущених процесів (дедуп за exe-іменем, сортовано).
+ * @returns {Promise<ProcessEntry[]>}
+ */
+export function listRunningProcesses() {
+  return invoke("list_running_processes");
+}
+
 /** Діалог вибору теки. @returns {Promise<string|null>} */
 export async function pickFolder() {
   const res = await open({ directory: true, multiple: false });

@@ -1,6 +1,6 @@
 //! Регресія дзеркальної релаксації порога для КОРОТКИХ службових слів
 //! (`detector::decide`, `WordRules::is_short_service`). Принцип «справжнє слово
-//! ↔ біліберда»: коротке (len 1-2) перемикається на одиночний dict-hit, якщо
+//! ↔ біліберда»: коротке (len=2, ОДИНОЧНІ не чіпаємо) перемикається на dict-hit, якщо
 //! кандидат — куроване службове слово (whitelist `data/dicts/{lang}.short.txt`)
 //! І джерельний двійник НЕ справжнє слово. Реальні короткі англ. (`is`/`to`) —
 //! НЕ чіпати (їхній двійник у поточній en — теж справжнє слово).
@@ -65,19 +65,24 @@ fn ctx<'a>(langs: &'a [LanguageProfile], current: &str, rules: &'a WordRules) ->
 }
 
 #[test]
-fn one_letter_service_words_switch() {
+fn one_letter_tokens_never_switch() {
+    // КОНТРАКТ ЗМІНЕНО (раніше assert був ЗВОРОТНИЙ). Одиночний токен (len=1)
+    // НІКОЛИ не перемикається — навіть якщо його укр.-двійник у whitelist коротких
+    // службових слів. Причина: репро власника — кома `,` (en) сидить на клавіші
+    // `б`(uk, whitelist) → дзеркало хибно робило з коми «б». Самотня літера
+    // практично ніколи не є самостійним словом, вартим перемикання; precision >
+    // recall. Дзеркало піднято до `min_switch_len` (≥2). Свідомий FN на одиночних.
     let Some(langs) = real_profiles() else {
         eprintln!("SKIP: реальні моделі відсутні");
         return;
     };
     let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
     let uk = &langs[0].layout;
-    // 1-літерні службові укр.: набрані в EN-розкладці → дзеркало має перемкнути.
     for w in ["і", "й", "в", "у", "з"] {
         let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
         assert!(
-            d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
-            "1-літерне службове '{w}' має перемкнутись (best={} '{}' conf={:.2})",
+            !d.switch,
+            "1-літерний токен '{w}' НЕ має перемикатись (best={} '{}' conf={:.2})",
             d.best.as_str(),
             d.best_text,
             d.confidence

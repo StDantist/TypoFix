@@ -495,18 +495,26 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // Стандартний шлях: довжина + поріг + (для коротких) LM-перевага кандидата.
     let standard_ok = len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok;
 
-    // **Дзеркальна релаксація для дуже коротких слів (len ≤ short_word_max_len).**
-    // Принцип «справжнє слово ↔ біліберда»: перемикаємо коротке, якщо
+    // **Дзеркальна релаксація для коротких слів (min_switch_len ≤ len ≤
+    // short_word_max_len; дефолт → РІВНО len==2).** Принцип «справжнє слово ↔
+    // біліберда»: перемикаємо коротке, якщо
     //   (а) кандидат — куроване СЛУЖБОВЕ слово цільової мови (whitelist у `rules`,
     //       не довільний збіг у повному словнику — інакше шум `ат`/`ді` від
     //       корпусу пробивав би поріг, як код-токени `fn`/`ls`); І
     //   (б) джерельний двійник НЕ справжнє слово: його немає у словнику вихідної
     //       мови (`!current_is_dict`) І його LM нижча за стелю (фонотактично
-    //       неправдоподібний). Тоді `і`/`ти`/`чи` форсяться на одиночний
-    //       dict-hit, а реальні короткі `is`/`to`/`db` — НІ (їхній двійник — теж
-    //       справжнє слово → умова (б) хибна). Поріг/min_len/LM-маржу обходимо
-    //       (одиночного dict-hit достатньо), але НЕ veto і НЕ `best≠current`.
-    let mirror_ok = len <= cfg.short_word_max_len
+    //       неправдоподібний). Тоді `от`/`ти`/`чи` форсяться на dict-hit, а реальні
+    //       короткі `is`/`to`/`db` — НІ (їхній двійник — теж справжнє слово → умова
+    //       (б) хибна). Поріг/LM-маржу обходимо (dict-hit достатньо), але НЕ veto,
+    //       НЕ `best≠current` і **НЕ `min_switch_len`** (одиночні токени — нижче).
+    // **Нижня межа дзеркала = `min_switch_len` (≥2) — ЗАМОК PRECISION.** Дзеркало
+    // НЕ сміє перемикати ОДИНОЧНИЙ токен (`len=1`). Інакше самотня кома, набрана в
+    // EN (клавіша `,`=`б`(0x33) у UK), форситься на whitelist-«б» — а кома в англ.
+    // це звичайна пунктуація, яку користувач і мав на увазі (precision > recall).
+    // Самотні літери на кшталт «б»/«о»/«я» практично ніколи не є самостійним словом,
+    // вартим перемикання. 2+-літерні службові слова («от»/«ти»/«we») лишаються.
+    let mirror_ok = len >= cfg.min_switch_len
+        && len <= cfg.short_word_max_len
         && best_is_dict
         && ctx.rules.is_short_service(&best, &best_text)
         && !current_is_dict
@@ -1282,21 +1290,109 @@ mod tests {
     }
 
     #[test]
-    fn mirror_switches_one_letter_service_word() {
-        // Однолітерне службове слово: `j`(en, не-слово) → «о»(uk, whitelist).
-        // min_switch_len(2) звичайно блокує len=1; дзеркало це обходить.
+    fn mirror_does_not_switch_one_letter_service_word() {
+        // PRECISION: однолітерний токен НІКОЛИ не перемикається, НАВІТЬ якщо його
+        // двійник — whitelist-слово (`j`→«о», «о» у whitelist). Самотня літера
+        // практично ніколи не є самостійним словом, вартим перемикання; а на
+        // клавішах-пунктуації (кома=`б`) це прямий FP «кома в EN → «б»». Дзеркало
+        // піднято до `min_switch_len` (≥2). Раніше тут стояв ЗВОРОТНИЙ assert —
+        // контракт свідомо змінено (баг розпізнавання, репро власника).
         let langs = [en_code_profile(), uk_short_profile()];
         let rules = rules_with_short_service(&[("uk", "о")]);
         let ctx = ctx_with_rules(&langs, "en", &rules);
         let d = decide(&strokes(&[0x24]), &ctx); // en "j" / uk "о"
-        assert_eq!(d.current_text, "j");
-        assert_eq!(d.best, LayoutId::new("uk"));
-        assert_eq!(d.best_text, "о");
-        assert!(d.switch, "однолітерне службове слово має перемкнутися");
+        assert!(
+            !d.switch,
+            "одиночна літера не сміє перемикатися навіть із whitelist (conf={})",
+            d.confidence
+        );
 
-        // Без whitelist — лишається заблокованим (контроль).
+        // Без whitelist — так само заблоковано (контроль причинності).
         let plain = ctx_with(&langs, "en");
         assert!(!decide(&strokes(&[0x24]), &plain).switch);
+    }
+
+    // --- Регресія: самотня кома в EN не перемикається на «б» (репро власника) --
+    // Клавіша `,` (scancode 0x33) у EN — пунктуація, у UK — літера «б». «б» Є у
+    // whitelist коротких службових слів (`uk.short.txt`) і в `uk.fst`, тож до
+    // фіксу дзеркало форсило len=1 перемикання → кома хибно ставала «б».
+
+    /// EN-профіль із комою на 0x33 (пунктуація, НЕ літера) + кілька літер.
+    fn comma_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (
+                    0x33,
+                    KeyCap {
+                        normal: ',',
+                        shift: Some('<'),
+                        altgr: None,
+                    },
+                ),
+                (0x18, KeyCap::letter('o', 'O')),
+                (0x14, KeyCap::letter('t', 'T')),
+            ],
+        );
+        let lm = NgramModel::train("hello world good to on", 3, 0.5);
+        let dict = Dictionary::from_words(["hello", "world", "good"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    /// UK-профіль, де та сама 0x33 — літера «б» (а 0x18/0x14 — «щ»/«е»).
+    fn comma_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x33, KeyCap::letter('б', 'Б')),
+                (0x18, KeyCap::letter('щ', 'Щ')),
+                (0x14, KeyCap::letter('е', 'Е')),
+            ],
+        );
+        let lm = NgramModel::train("привіт світ як справи добре", 3, 0.5);
+        // «б» Є у словнику (як у реальному uk.fst, куди зливається whitelist).
+        let dict = Dictionary::from_words(["привіт", "світ", "добре", "б"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    #[test]
+    fn lone_comma_in_en_never_switches_to_letter_twin() {
+        let langs = [comma_en_profile(), comma_uk_profile()];
+        // «б» у whitelist коротких службових слів — як у реальному uk.short.txt.
+        let rules = rules_with_short_service(&[("uk", "б")]);
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x33]), &ctx); // en "," / uk "б"
+        assert!(
+            !d.switch,
+            "самотня кома в EN не сміє перемикатися на «б» (best={:?}, conf={})",
+            d.best, d.confidence
+        );
+    }
+
+    #[test]
+    fn lone_comma_does_not_switch_even_without_whitelist() {
+        // Контроль причинності: без whitelist кома теж не перемикається (стандартний
+        // короткий поріг блокує len=1). Доводить, що єдиний шлях до бага був дзеркало.
+        let langs = [comma_en_profile(), comma_uk_profile()];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x33]), &ctx);
+        assert!(
+            !d.switch,
+            "кома без whitelist не перемикається (conf={})",
+            d.confidence
+        );
     }
 
     // --- Корекція регістру (помилка перетриманого Shift) ---------------------

@@ -1,6 +1,8 @@
 <script>
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { t } from "./i18n.js";
   import {
     loadSettings,
@@ -116,6 +118,19 @@
   let statusDetail = $state("");
   /** Чи показано підтвердження скидання параметрів до стандартних. */
   let showResetConfirm = $state(false);
+
+  // Про застосунок: версію беремо динамічно з Tauri (tauri.conf.json) при монтуванні.
+  const GITHUB_URL = "https://github.com/StDantist/TypoFix";
+  let appVersion = $state("");
+
+  /** Відкрити URL у системному браузері (через tauri-plugin-opener — <a> у webview не відкриває). */
+  async function openGithub() {
+    try {
+      await openUrl(GITHUB_URL);
+    } catch {
+      // Тихо ігноруємо: лінк лишається виділним для копіювання вручну.
+    }
+  }
 
   // Автозапуск (B5). НЕ частина settings.json — джерело істини сам плагін (реєстр).
   // `applied` = останнє значення, надіслане в бекенд: guard, щоб $effect не
@@ -243,6 +258,12 @@
     reload();
     reloadLearned();
     reloadLayouts();
+    // Версія застосунку для секції «Про застосунок» (з tauri.conf.json).
+    getVersion()
+      .then((v) => {
+        appVersion = v;
+      })
+      .catch(() => {});
     // Стан автозапуску читаємо з плагіна (реєстр — джерело істини), не з конфігу.
     getAutostart()
       .then((on) => {
@@ -669,6 +690,27 @@
     </div>
   </section>
 
+  <!-- Про застосунок -->
+  <section class="about" data-testid="card-about">
+    <span class="about-name">
+      {$t("app.name")}{#if appVersion}<span class="about-ver"
+          >&nbsp;v{appVersion}</span
+        >{/if}
+    </span>
+    <span class="about-author">{$t("about.author")}</span>
+    <a
+      class="about-link"
+      data-testid="about-link"
+      href={GITHUB_URL}
+      onclick={(e) => {
+        e.preventDefault();
+        openGithub();
+      }}
+    >
+      {$t("about.github")}
+    </a>
+  </section>
+
   <!-- Панель дій -->
   <footer class="actions">
     <div class="status" data-testid="save-status" data-status={statusKey}>
@@ -1077,6 +1119,36 @@
     color: var(--text-dim);
     font-size: 0.78rem;
     text-align: center;
+  }
+
+  /* Про застосунок — скромний приглушений футер */
+  .about {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+  }
+
+  .about-name {
+    font-weight: 600;
+  }
+
+  .about-ver {
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .about-link {
+    color: var(--accent);
+    text-decoration: none;
+    user-select: text;
+  }
+
+  .about-link:hover {
+    text-decoration: underline;
   }
 
   /* Розкладки клавіатури */

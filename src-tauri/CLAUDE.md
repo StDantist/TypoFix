@@ -480,6 +480,10 @@ B3.4 «у цій програмі не працювати» забезпечує
 events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/теки —
 плагін `tauri-plugin-dialog`), `global-shortcut:allow-register/-unregister/-unregister-all/-is-registered`
 (плагін `tauri-plugin-global-shortcut`), `autostart:allow-enable/-disable/-is-enabled`
-(плагін `tauri-plugin-autostart`, B5). Власні app-команди (`load_settings`/`save_settings`/
+(плагін `tauri-plugin-autostart`, B5), `opener:allow-open-url` (плагін
+`tauri-plugin-opener` — відкриття зовнішніх URL у системному браузері; **готча:**
+звичайний `<a target="_blank">` у webview НЕ відкриває браузер, тому лінк на GitHub
+у секції «Про застосунок» іде через JS `openUrl()` з `@tauri-apps/plugin-opener`,
+а сам `<a>` має `onclick` із `preventDefault`). Власні app-команди (`load_settings`/`save_settings`/
 `get_autostart`/`set_autostart`/`list_learned`/`remove_learned`/`clear_learned`)
 працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.

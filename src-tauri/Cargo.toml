@@ -33,6 +33,9 @@ tauri-plugin-global-shortcut = "2"
 # Автозапуск разом із ОС (B5): керує записом у реєстрі (Windows Run-ключ) /
 # LaunchAgent (macOS). Стан автозапуску — джерело істини сам плагін, НЕ settings.json.
 tauri-plugin-autostart = "2"
+# Відкриття зовнішніх URL у системному браузері (лінк на GitHub у секції «Про застосунок»).
+# Звичайний <a target="_blank"> у webview НЕ відкриває браузер — потрібен цей плагін.
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Перелік запущених процесів для пікера виключень (кросплатформно — стане у пригоді

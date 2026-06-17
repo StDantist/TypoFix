@@ -862,6 +862,8 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None::<Vec<&str>>,
         ))
+        // Відкриття зовнішніх посилань (лінк на GitHub у секції «Про застосунок»).
+        .plugin(tauri_plugin_opener::init())
         .manage(AppState::default())
         .manage(Mutex::new(RuntimeManager::default()))
         .manage(hotkeys::HotkeyRegistry::default())

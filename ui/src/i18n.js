@@ -176,6 +176,11 @@ const messages = {
 
     "footer.note":
       "Конфіг зберігається локально. Натиски й набраний текст ніколи не пишуться на диск.",
+
+    // Про застосунок
+    "about.version": "Версія",
+    "about.author": "Розробив StDantist",
+    "about.github": "GitHub",
   },
 };
 

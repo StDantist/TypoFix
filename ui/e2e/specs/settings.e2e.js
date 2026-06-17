@@ -128,6 +128,15 @@ describe("TypoFix — вікно налаштувань (UI-e2e)", () => {
     });
   });
 
+  it("секція «Про застосунок» рендериться (автор + лінк на GitHub)", async () => {
+    const about = await tid("card-about");
+    expect(await about.getText()).toContain("StDantist");
+    const link = await tid("about-link");
+    expect(await link.getAttribute("href")).toContain(
+      "github.com/StDantist/TypoFix",
+    );
+  });
+
   it("клік «Зберегти» не дає помилки", async () => {
     // Робимо форму «брудною» (вмикаємо Save): перемикаємо тоггл звуку в картці.
     const soundLabel = await $('[data-testid="card-feedback"] .toggle');

@@ -6,6 +6,7 @@
 
 // pub, щоб демо-бінар `src/bin/live_engine.rs` переюзав helper'и рантайму.
 pub mod config;
+mod hotkeys;
 pub mod runtime;
 
 use std::sync::Mutex;
@@ -168,7 +169,8 @@ fn refresh_tray(app: &AppHandle, enabled: bool) {
 
 /// Перемкнути «увімкнено» з трею: оновити стан, зберегти на диск,
 /// оновити меню й сповістити вікно налаштувань.
-fn toggle_enabled(app: &AppHandle) {
+/// `pub(crate)` — це ж дія для хоткея «Пауза/Відновити» (`hotkeys::route`).
+pub(crate) fn toggle_enabled(app: &AppHandle) {
     let state = app.state::<AppState>();
     let snapshot = {
         let mut settings = state.settings.lock().expect("AppState отруєно");
@@ -551,6 +553,8 @@ fn save_settings(
     refresh_tray(&app, cleaned.enabled);
     // Перебудувати рантайм-цикл під нові виключення/детектор/мову.
     sync_runtime(&app, &cleaned);
+    // Перереєструвати хоткеї під нові прив'язки (увімк./вимк./зміна акселератора).
+    hotkeys::apply(&app, &cleaned);
     Ok(cleaned)
 }
 
@@ -558,8 +562,10 @@ fn save_settings(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(hotkeys::plugin())
         .manage(AppState::default())
         .manage(Mutex::new(RuntimeManager::default()))
+        .manage(hotkeys::HotkeyRegistry::default())
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
@@ -578,6 +584,10 @@ pub fn run() {
 
             // Піднімаємо рушій, якщо застосунок увімкнено (на паузі — нічого).
             sync_runtime(&handle, &initial);
+
+            // Реєструємо глобальні хоткеї з конфіга (незалежно від enabled —
+            // інакше неможливо було б відновити роботу з клавіатури).
+            hotkeys::apply(&handle, &initial);
 
             let menu = build_tray_menu(&handle, enabled)?;
 

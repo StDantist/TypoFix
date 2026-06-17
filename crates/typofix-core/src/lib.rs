@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod buffer;
+pub mod case;
 pub mod detector;
 pub mod dict;
 pub mod engine;
@@ -24,6 +25,7 @@ pub mod rules;
 pub mod undo;
 
 pub use buffer::{BufferStore, WordBuffer};
+pub use case::{transform_case, CaseMode};
 pub use detector::{Decision, DetectorConfig, LanguageProfile};
 pub use dict::Dictionary;
 pub use exceptions::{ExclusionRules, LearnedExceptions};
@@ -87,6 +89,19 @@ impl Context<'_> {
 /// `ctx` (жодного годинника/IO/випадковості).
 pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Action> {
     engine::step(state, ev, ctx)
+}
+
+/// Скасувати ОСТАННІЙ авто-перенабір гарячою клавішею (B1): стерти набраний
+/// текст, повернути стару розкладку, надрукувати оригінал і завчити слово.
+/// Деталі та інваріанти — [`engine::revert_last`].
+pub fn revert_last(state: &mut EngineState) -> Vec<Action> {
+    engine::revert_last(state)
+}
+
+/// Примусово перемкнути ОСТАННЄ слово активного вікна в іншу мову БЕЗ порогу
+/// впевненості (гаряча клавіша B1). Деталі — [`engine::force_switch_last`].
+pub fn force_switch_last(state: &mut EngineState, ctx: &Context) -> Vec<Action> {
+    engine::force_switch_last(state, ctx)
 }
 
 #[cfg(test)]

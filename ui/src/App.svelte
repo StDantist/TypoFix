@@ -15,13 +15,58 @@
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
     return {
-      version: 1,
+      version: 2,
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
       words: { always_switch: [], never_switch: [] },
+      hotkeys: {
+        pause_resume: { accelerator: "Ctrl+Alt+P", enabled: false },
+        revert_last: { accelerator: "Ctrl+Alt+Z", enabled: false },
+        manual_switch: { accelerator: "Ctrl+Alt+S", enabled: false },
+        case_upper: { accelerator: "Ctrl+Alt+U", enabled: false },
+        case_lower: { accelerator: "Ctrl+Alt+L", enabled: false },
+        case_sentence: { accelerator: "Ctrl+Alt+E", enabled: false },
+      },
       detection: { min_word_len: 3, confidence_threshold: 0.75 },
     };
+  }
+
+  /** Порядок дій у картці хоткеїв (дзеркало `HotkeyAction::ALL` у бекенді). */
+  const HOTKEY_ACTIONS = [
+    "pause_resume",
+    "revert_last",
+    "manual_switch",
+    "case_upper",
+    "case_lower",
+    "case_sentence",
+  ];
+
+  /** Зібрати рядок-акселератор Tauri з події клавіатури (`Ctrl+Alt+P`). */
+  function accelFromEvent(/** @type {KeyboardEvent} */ e) {
+    const mods = [];
+    if (e.ctrlKey) mods.push("Ctrl");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push("Super");
+    const key = e.key;
+    // Самі модифікатори — ще не повна комбінація.
+    if (["Control", "Alt", "Shift", "Meta"].includes(key)) return null;
+    const main = key.length === 1 ? key.toUpperCase() : key;
+    return [...mods, main].join("+");
+  }
+
+  /** Захопити комбінацію у поле акселератора (Backspace/Delete — очистити). */
+  function captureAccel(/** @type {KeyboardEvent} */ e, /** @type {string} */ action) {
+    if (e.key === "Tab") return; // не ламаємо навігацію
+    if (e.key === "Backspace" || e.key === "Delete") {
+      settings.hotkeys[action].accelerator = "";
+      e.preventDefault();
+      return;
+    }
+    const accel = accelFromEvent(e);
+    if (accel) settings.hotkeys[action].accelerator = accel;
+    e.preventDefault();
   }
 
   let settings = $state(defaultSettings());
@@ -248,6 +293,35 @@
     </div>
   </section>
 
+  <!-- Гарячі клавіші -->
+  <section class="card">
+    <h2>{$t("section.hotkeys.title")}</h2>
+    <p class="desc">{$t("section.hotkeys.desc")}</p>
+
+    <div class="hotkey-list">
+      {#each HOTKEY_ACTIONS as action (action)}
+        <div class="hotkey-row">
+          <input
+            type="checkbox"
+            aria-label={$t("hotkeys.enabled.aria")}
+            bind:checked={settings.hotkeys[action].enabled}
+          />
+          <span class="hk-label">{$t(`hotkeys.action.${action}`)}</span>
+          <input
+            class="hk-accel"
+            type="text"
+            bind:value={settings.hotkeys[action].accelerator}
+            placeholder={$t("hotkeys.accel.placeholder")}
+            disabled={!settings.hotkeys[action].enabled}
+            onkeydown={(e) => captureAccel(e, action)}
+          />
+        </div>
+      {/each}
+    </div>
+
+    <p class="hk-note">{$t("hotkeys.note")}</p>
+  </section>
+
   <!-- Advanced: пороги детектора -->
   <section class="card">
     <h2>{$t("section.detection.title")}</h2>
@@ -401,6 +475,35 @@
 
   .word-group + .word-group {
     margin-top: 1rem;
+  }
+
+  .hotkey-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .hotkey-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .hotkey-row .hk-label {
+    flex: 1;
+    font-size: 0.9rem;
+  }
+
+  .hotkey-row .hk-accel {
+    width: 160px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .hk-note {
+    margin: 0.85rem 0 0;
+    color: var(--text-dim);
+    font-size: 0.78rem;
   }
 
   .field {

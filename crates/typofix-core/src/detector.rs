@@ -603,6 +603,39 @@ fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
 /// безпечна гілка-роздільник (стара поведінка: пунктуація лишається роздільником).
 /// За рівної впевненості перемагає гілка-роздільник (консервативно). Внутрішня
 /// пунктуація-літера завжди лишається літерою (стрипаємо тільки хвіст).
+/// Примусове рішення для РУЧНОГО перемикання останнього слова (гаряча клавіша
+/// B1). Обирає найкращий НЕ-поточний кандидат за LM і перемикає на нього БЕЗ
+/// порогу / мінімальної довжини / veto — ручна команда користувача переважає всі
+/// гейти precision (на відміну від автоматичного [`decide`]).
+///
+/// `None`, якщо немає поточного профілю (не знаємо, що на екрані → не можемо
+/// коректно стерти) або немає жодної іншої мови-кандидата. Суфікс порожній і
+/// `caps_only == false`: ручне перемикання завжди змінює розкладку.
+pub fn force_decision(strokes: &[KeyStroke], ctx: &Context) -> Option<Decision> {
+    let current = ctx.current_profile()?;
+    let current_text = current.layout.interpret(strokes);
+    let (best, best_text) = ctx
+        .languages
+        .iter()
+        .filter(|p| p.id != ctx.current_layout)
+        .map(|p| {
+            let text = p.layout.interpret(strokes);
+            let lm = p.lm.score(&text);
+            (p.id.clone(), text, lm)
+        })
+        .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, text, _)| (id, text))?;
+    Some(Decision {
+        best,
+        best_text,
+        current_text,
+        switch: true,
+        confidence: 0.0,
+        suffix: String::new(),
+        caps_only: false,
+    })
+}
+
 pub fn decide(strokes: &[KeyStroke], ctx: &Context) -> Decision {
     let k = trailing_separator_candidates(strokes, ctx);
     let letter = eval_branch(strokes, ctx);

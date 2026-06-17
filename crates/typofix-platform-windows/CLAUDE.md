@@ -9,7 +9,8 @@
   тестованою без живої системи. Не тягни сюди WinAPI.
 - `layout.rs` — `ToUnicodeEx`-запит розкладки + `LayoutId`↔HKL (Windows).
 - `window.rs` — активне вікно (`GetForegroundWindow`/`QueryFullProcessImageNameW`).
-- `inject.rs` — `SendInput`/перемикання розкладки.
+- `inject.rs` — `SendInput`/перемикання розкладки + `send_ctrl_c` (Ctrl+C через VK).
+- `selection.rs` — `get_selection_text()`: синтетичний Ctrl+C → читання буфера.
 - `hook.rs` — LL-хуки + message-pump потік.
 - `src/bin/live_spike.rs` — **РУЧНИЙ** харнес (див. нижче).
 - Не-Windows ціль → тонка заглушка `stub` (щоб CI на Linux лишався зеленим).
@@ -76,6 +77,21 @@
     потік → завжди en). Оптимізація (поки НЕ зроблено): кешувати розкладку й
     оновлювати по `EVENT_SYSTEM_FOREGROUND` + на межі слова, замість запиту на
     кожен виклик. Зараз пріоритет — коректність; кеш — follow-up.
+
+11. **`get_selection_text` (selection.rs) ОБОВʼЯЗКОВО відновлює буфер обміну.**
+    Шле підписаний Ctrl+C (`inject::send_ctrl_c`, той самий `INJECT_SIGNATURE` —
+    хук ігнорує), чекає зміни `GetClipboardSequenceNumber` (таймаут 400 мс,
+    крок 10 мс), читає `CF_UNICODETEXT`, тоді **повертає** попередній вміст
+    (правило приватності №4 — користувач не має втратити clipboard). Якщо seq не
+    змінився (порожнє виділення/таймаут) → буфер НЕ чіпали, відновлювати нічого,
+    повертаємо `None`. 🔴 Знімок робимо ЛИШЕ для global-памʼятних форматів
+    (`is_global_format`): `GlobalSize`/`GlobalLock` на handle-форматах (CF_BITMAP,
+    CF_PALETTE, CF_METAFILEPICT, CF_ENHMETAFILE, DSP-варіанти) = **пошкодження
+    купи** (STATUS_HEAP_CORRUPTION). `SetClipboardData` передає власність памʼяті
+    ОС → прийняті handle більше НЕ звільняємо (`GlobalFree`), решту копій — так.
+    Тест свідомо ОДИН (`headless_safety_and_clipboard_preserved`): буфер процес-
+    глобальний, два паралельні clipboard-тести гонилися б за ним і падали.
+    Виклик передбачено з ОДНОГО потоку движка (не конкурентно).
 
 ## Що перевірено автоматично (частина A, безпечно, без вводу в систему)
 `cargo test -p typofix-platform-windows` (15 тестів) реально б'є по WinAPI:

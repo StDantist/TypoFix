@@ -136,6 +136,35 @@ npm --prefix ui install
   подію `settings:changed` (повний конфіг). Вікно слухає й оновлює ЛИШЕ перемикач
   `enabled`, не чіпаючи можливих незбережених правок у формі.
 
+## Гарячі клавіші (`hotkeys.rs` + `HotkeysDto`) — Фаза B1
+- **Плагін:** `tauri-plugin-global-shortcut` v2. Реєструється у `run()` через
+  `hotkeys::plugin()` (єдиний `with_handler`). Стан `HotkeyRegistry` (Tauri-`manage`,
+  `Mutex<HashMap<Shortcut, HotkeyAction>>`) мапить акселератор, що спрацював, → дію.
+- **Дозволи (capabilities):** `global-shortcut:allow-register/-unregister/-unregister-all/-is-registered`
+  у `capabilities/default.json`. Реєстрація йде з Rust (не через JS-`invoke`), але
+  дозволи додано про запас (якщо UI колись керуватиме напряму).
+- **DTO:** `HotkeysDto` в `AppSettings` (`config.rs`) — по `HotkeyBinding {accelerator, enabled}`
+  на дію. Дії (`HotkeyAction::ALL`): `pause_resume`, `revert_last`, `manual_switch`,
+  `case_upper`, `case_lower`, `case_sentence`. **Усі дефолтно ВИМКНЕНІ**, акселератори
+  неконфліктні (`Ctrl+Alt+{P,Z,S,U,L,E}`). `serde(default)` → старий `settings.json`
+  без секції читається в дефолти (back-compat). `SCHEMA_VERSION` піднято 1→2.
+  `sanitized()` лише тримить акселератори (валідність формату перевіряє вже плагін
+  при `Shortcut::from_str` — невалідний/зайнятий просто не активується, лог у stderr).
+- **`hotkeys::apply(app, settings)`:** зняти ВСІ (`unregister_all`) → поставити заново
+  лише `enabled` прив'язки з непорожнім акселератором. Викликається у `setup` і після
+  кожного `save_settings`. **Хоткеї НЕ залежать від `enabled`** (пауза/активний):
+  інакше не відновити роботу з клавіатури.
+- **Роутинг (`hotkeys::route`):** handler реагує лише на `ShortcutState::Pressed`
+  (кличеться й на Released). Цієї ітерації під'єднано **лише `PauseResume`** → той
+  самий `crate::toggle_enabled` (інверсія `enabled`, запис на диск, оновлення трею,
+  емісія `settings:changed`). Решта — заглушка з `TODO` + лог (revert/manual/case
+  прийдуть із core-API `revert_last`/`force_switch_last`/`transform_case` наступним
+  кроком). `toggle_enabled` тепер `pub(crate)` (дія для хоткея).
+- **UI-картка «Гарячі клавіші»** (`App.svelte`): рядок на дію — чекбокс `enabled` +
+  поле акселератора. Поле захоплює комбінацію по `onkeydown` (`accelFromEvent` →
+  `Ctrl+Alt+P`; Backspace/Delete — очистити), але лишається й текстово редагованим.
+  i18n — `hotkeys.*` у `i18n.js`; typedef `Hotkeys`/`HotkeyBinding` у `api.js`.
+
 ## Рантайм-цикл рушія (`runtime.rs`) — серце Фази 5
 Зв'язує живу платформу (Windows-хук) із чистим ядром.
 - **`RuntimeManager`** (Tauri-стан за `Mutex`) керує життям потоку `typofix-engine`.
@@ -224,5 +253,6 @@ cargo run -p typofix-app --bin live_engine
 `capabilities/default.json` (window `settings`) перелічує дозволи. Без потрібного
 дозволу `invoke` падає в рантаймі (компіляція мовчить!). Зараз увімкнено: `core:default`,
 events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/теки —
-плагін `tauri-plugin-dialog`). Власні app-команди (`load_settings`/`save_settings`)
+плагін `tauri-plugin-dialog`), `global-shortcut:allow-register/-unregister/-unregister-all/-is-registered`
+(плагін `tauri-plugin-global-shortcut`). Власні app-команди (`load_settings`/`save_settings`)
 працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.

@@ -23,6 +23,8 @@ mod inject;
 #[cfg(windows)]
 mod layout;
 #[cfg(windows)]
+mod selection;
+#[cfg(windows)]
 mod window;
 
 #[cfg(windows)]
@@ -35,6 +37,8 @@ pub use layout::{
     char_for_active_layout, char_for_layout, current_hkl_bits, current_layout_id,
     installed_layout_ids, probe_layout_methods, LayoutProbe, MethodResult,
 };
+#[cfg(windows)]
+pub use selection::get_selection_text;
 #[cfg(windows)]
 pub use window::foreground_window_info;
 

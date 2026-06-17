@@ -68,6 +68,21 @@ const messages = {
     "words.add.always": "Додати слово",
     "words.add.never": "Додати слово",
 
+    // Гарячі клавіші
+    "section.hotkeys.title": "Гарячі клавіші",
+    "section.hotkeys.desc":
+      "Глобальні комбінації для швидких дій. Усі вимикані й перепризначувані: увімкніть потрібні, клацніть поле й натисніть бажану комбінацію (Backspace — очистити). Дефолти неконфліктні (Ctrl+Alt+…).",
+    "hotkeys.action.pause_resume": "Пауза / відновлення",
+    "hotkeys.action.revert_last": "Скасувати останнє перемикання",
+    "hotkeys.action.manual_switch": "Перемкнути розкладку вручну",
+    "hotkeys.action.case_upper": "Регістр: ВЕЛИКІ",
+    "hotkeys.action.case_lower": "Регістр: малі",
+    "hotkeys.action.case_sentence": "Регістр: Як речення",
+    "hotkeys.accel.placeholder": "напр. Ctrl+Alt+P",
+    "hotkeys.enabled.aria": "Увімкнути цей хоткей",
+    "hotkeys.note":
+      "Поки що працює лише «Пауза / відновлення». Решта комбінацій під'єднаються найближчим оновленням.",
+
     // Advanced
     "section.detection.title": "Поріг впевненості (advanced)",
     "section.detection.desc":

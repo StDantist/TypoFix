@@ -3,7 +3,7 @@
 //! Тут вирішується, коли штовхати страйк у буфер, коли інвалідувати його, а
 //! коли (на межі слова) запускати детектор і будувати план перенабору.
 
-use crate::{detector, replacer, Context, EngineState, KeyStroke, Layout};
+use crate::{detector, replacer, Context, EngineState, KeyStroke, Layout, LayoutId};
 use typofix_platform::{Action, InputEvent, KeyDir, KeyEvent, Modifiers, WindowInfo};
 
 /// Структурні клавіші — межа слова незалежно від розкладки (scancode set 1).
@@ -16,13 +16,25 @@ const SC_BACKSPACE: u32 = 0x0E;
 /// Останній автоперенабір, що очікує можливого негайного відкидання.
 ///
 /// Зберігається в [`EngineState`] між кроками: якщо НАСТУПНА реальна клавіша —
-/// Backspace у тому ж вікні, вважаємо, що користувач відкинув перенабір.
+/// Backspace у тому ж вікні, вважаємо, що користувач відкинув перенабір
+/// (див. [`step`]). Несе також усе потрібне для ЯВНОГО ручного відкату гарячою
+/// клавішею ([`revert_last`]): скільки символів зараз на екрані від перенабору,
+/// повний оригінальний текст для відновлення і стару розкладку.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingRetype {
     /// Вікно, в якому стався перенабір.
     pub(crate) window_key: String,
-    /// Оригінальне слово (те, що було на екрані до виправлення).
+    /// Оригінальне СЛОВО (без суфікса/роздільника) — для learned-veto й навчання.
     pub(crate) original_word: String,
+    /// Скільки СИМВОЛІВ перенабору зараз на екрані (`best_text` + суфікс +
+    /// роздільник) — рівно стільки треба стерти при відкаті.
+    pub(crate) retyped_len: u32,
+    /// Повний оригінальний текст для відновлення на екрані: слово РАЗОМ із
+    /// хвостовим суфіксом і друкованим роздільником (те, що було перед перенабором).
+    pub(crate) original_full: String,
+    /// Розкладка, на яку треба повернутись при відкаті (стара, до перемикання).
+    /// `None` — корекція без зміни розкладки (caps-only) → `SwitchLayout` не треба.
+    pub(crate) restore_layout: Option<LayoutId>,
 }
 
 /// Класифікація натискання щодо слова.
@@ -128,14 +140,45 @@ fn handle_boundary(
 
     let actions = replacer::plan(&decision, separator);
     if decision.switch {
-        // Відкриваємо коротке вікно очікування відкидання цього перенабору.
-        state.pending_retype = Some(PendingRetype {
-            window_key: wkey.to_string(),
-            original_word: decision.current_text,
-        });
+        // Відкриваємо коротке вікно очікування відкидання цього перенабору й
+        // запам'ятовуємо все для можливого ЯВНОГО відкату (revert_last).
+        state.pending_retype = Some(build_pending(wkey, &decision, separator, ctx));
     }
     state.buffers.for_window(wkey).reset();
     actions
+}
+
+/// Зібрати [`PendingRetype`] з рішення, що перемикає: рахує, скільки символів
+/// перенабору опинилось на екрані, і формує повний оригінал для відновлення.
+///
+/// На екрані після перенабору: `best_text + suffix + separator?`; до перенабору
+/// було: `current_text + suffix + separator?`. Хвостовий суфікс і друкований
+/// роздільник однакові в обох (та сама к-сть символів), різниться лише саме слово.
+fn build_pending(
+    wkey: &str,
+    decision: &crate::detector::Decision,
+    separator: Option<char>,
+    ctx: &Context,
+) -> PendingRetype {
+    let mut tail = decision.suffix.clone();
+    if let Some(sep) = separator {
+        tail.push(sep);
+    }
+    let retyped_len = (decision.best_text.chars().count() + tail.chars().count()) as u32;
+    let original_full = format!("{}{}", decision.current_text, tail);
+    // caps-корекція не міняла розкладку → повертати нічого не треба.
+    let restore_layout = if decision.caps_only {
+        None
+    } else {
+        Some(ctx.current_layout.clone())
+    };
+    PendingRetype {
+        window_key: wkey.to_string(),
+        original_word: decision.current_text.clone(),
+        retyped_len,
+        original_full,
+        restore_layout,
+    }
 }
 
 /// Внутрішня реалізація кроку (див. [`crate::step`]).
@@ -212,4 +255,67 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
             Vec::new()
         }
     }
+}
+
+/// Скасувати ОСТАННІЙ авто-перенабір (гаряча клавіша B1) — ручний аналог
+/// Backspace-rejection, але викликається ЯВНО (не залежить від наступної події).
+///
+/// Стирає щойно набраний текст ([`Action::DeleteChars`]), повертає стару розкладку
+/// ([`Action::SwitchLayout`], якщо перемикання було), друкує ОРИГІНАЛ
+/// ([`Action::TypeUnicode`]) і ЗАВЧАЄ слово ([`LearnedExceptions::learn`] +
+/// [`Action::CommitException`]), щоб апка більше його не чіпала. Якщо скасовувати
+/// нічого (немає `pending_retype`) → порожній план.
+pub fn revert_last(state: &mut EngineState) -> Vec<Action> {
+    let Some(pending) = state.pending_retype.take() else {
+        return Vec::new();
+    };
+    let mut actions = Vec::with_capacity(4);
+    if pending.retyped_len > 0 {
+        actions.push(Action::DeleteChars(pending.retyped_len));
+    }
+    if let Some(layout) = pending.restore_layout {
+        actions.push(Action::SwitchLayout(layout));
+    }
+    actions.push(Action::TypeUnicode(pending.original_full));
+    // Завчити слово (миттєвий ефект у сесії) + емісія для персистенції app-шаром.
+    state.learned.learn(&pending.original_word);
+    actions.push(Action::CommitException(pending.original_word));
+    actions
+}
+
+/// Примусово перемкнути ОСТАННЄ слово активного вікна в ІНШУ мову БЕЗ порогу
+/// впевненості (гаряча клавіша B1 — і «перемкнути вручну», і «змінити розкладку
+/// останнього слова», аналог подвійного Shift).
+///
+/// Бере поточний word-буфер активного вікна й перенабирає його у найкращий
+/// НЕ-поточний кандидат (ручне рішення користувача переважає поріг/довжину/veto —
+/// див. [`detector::force_decision`]). Якщо буфер порожній, немає поточного
+/// профілю чи іншої мови — порожній план. Залишає `pending_retype`, тож ручне
+/// перемикання теж можна відкотити через [`revert_last`].
+pub fn force_switch_last(state: &mut EngineState, ctx: &Context) -> Vec<Action> {
+    // Виключене вікно — повний bypass (як у `step`).
+    if ctx.is_window_excluded() {
+        return Vec::new();
+    }
+    let wkey = window_key(&ctx.active_window);
+    let strokes: Vec<KeyStroke> = state.buffers.for_window(&wkey).strokes().to_vec();
+    if strokes.is_empty() {
+        return Vec::new();
+    }
+    let Some(decision) = detector::force_decision(&strokes, ctx) else {
+        return Vec::new();
+    };
+    // Ручне перемикання тригериться без друкованого роздільника (слово ще на
+    // екрані, межі не було) → separator = None.
+    let actions = replacer::plan(&decision, None);
+    state.pending_retype = Some(PendingRetype {
+        window_key: wkey.clone(),
+        original_word: decision.current_text.clone(),
+        retyped_len: decision.best_text.chars().count() as u32,
+        original_full: decision.current_text,
+        restore_layout: Some(ctx.current_layout.clone()),
+    });
+    // Слово «завершено» цим ручним рішенням → буфер більше не відображає екран.
+    state.buffers.for_window(&wkey).reset();
+    actions
 }

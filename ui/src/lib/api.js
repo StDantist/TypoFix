@@ -14,11 +14,29 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {number} min_word_len
  * @property {number} confidence_threshold
  *
+ * @typedef {Object} HotkeyBinding
+ * @property {string} accelerator  рядок-акселератор у форматі Tauri, напр. "Ctrl+Alt+P"
+ * @property {boolean} enabled
+ *
+ * @typedef {Object} Hotkeys
+ * @property {HotkeyBinding} pause_resume
+ * @property {HotkeyBinding} revert_last
+ * @property {HotkeyBinding} manual_switch
+ * @property {HotkeyBinding} case_upper
+ * @property {HotkeyBinding} case_lower
+ * @property {HotkeyBinding} case_sentence
+ *
+ * @typedef {Object} Words
+ * @property {string[]} always_switch
+ * @property {string[]} never_switch
+ *
  * @typedef {Object} AppSettings
  * @property {number} version
  * @property {boolean} enabled
  * @property {string} language
  * @property {Exclusions} exclusions
+ * @property {Words} words
+ * @property {Hotkeys} hotkeys
  * @property {Detection} detection
  */
 

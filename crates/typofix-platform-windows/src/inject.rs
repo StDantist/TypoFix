@@ -10,7 +10,7 @@
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
-    KEYEVENTF_UNICODE, VK_BACK,
+    KEYEVENTF_UNICODE, VK_BACK, VK_CONTROL,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
@@ -79,6 +79,23 @@ pub fn delete_chars(n: u32) {
             KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP,
         ));
     }
+    send(&inputs);
+}
+
+/// Віртуальний код літери `C` (немає константи у windows-sys).
+const VK_C: u16 = 0x43;
+
+/// Синтетично натиснути Ctrl+C (down Ctrl → down C → up C → up Ctrl), одним
+/// атомарним пакетом. Несе [`INJECT_SIGNATURE`], тож хук розпізнає це як власний
+/// ввід і не реагує. Через **віртуальні** коди (не scancode): копіювання —
+/// логічна команда застосунку, не залежить від фізичної розкладки.
+pub fn send_ctrl_c() {
+    let inputs = [
+        kbd_input(VK_CONTROL, 0, 0),
+        kbd_input(VK_C, 0, 0),
+        kbd_input(VK_C, 0, KEYEVENTF_KEYUP),
+        kbd_input(VK_CONTROL, 0, KEYEVENTF_KEYUP),
+    ];
     send(&inputs);
 }
 

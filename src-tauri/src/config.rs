@@ -21,7 +21,8 @@ use tauri::{AppHandle, Manager};
 pub const SETTINGS_FILE: &str = "settings.json";
 
 /// Поточна версія схеми конфігу (для майбутніх міграцій).
-pub const SCHEMA_VERSION: u32 = 1;
+/// v2 додав секцію `hotkeys` (бекворд-сумісно: відсутнє поле → дефолт через `serde(default)`).
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Мовна пара. Поки фіксовано uk↔en, але закладено в модель як enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -61,6 +62,114 @@ pub struct WordsDto {
     pub never_switch: Vec<String>,
 }
 
+/// Дія, яку може запускати глобальна гаряча клавіша (B1).
+/// `Copy`+`Hash` — щоб бути ключем/значенням у реєстрі хоткеїв (`hotkeys.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HotkeyAction {
+    /// Пауза / відновлення (toggle `enabled`) — єдина під'єднана цієї ітерації.
+    PauseResume,
+    /// Скасувати останнє авто-перемикання (повернути оригінал + завчити слово).
+    RevertLast,
+    /// Примусово перемкнути розкладку останнього слова/виділення (ігнорує поріг).
+    ManualSwitch,
+    /// Перевести виділення у ВЕРХНІЙ регістр.
+    CaseUpper,
+    /// Перевести виділення у нижній регістр.
+    CaseLower,
+    /// Перевести виділення у Регістр речення.
+    CaseSentence,
+}
+
+impl HotkeyAction {
+    /// Усі дії в стабільному порядку (для ітерації при реєстрації/в UI).
+    pub const ALL: [HotkeyAction; 6] = [
+        HotkeyAction::PauseResume,
+        HotkeyAction::RevertLast,
+        HotkeyAction::ManualSwitch,
+        HotkeyAction::CaseUpper,
+        HotkeyAction::CaseLower,
+        HotkeyAction::CaseSentence,
+    ];
+}
+
+/// Одна прив'язка хоткея: рядок-акселератор (формат Tauri, напр. `Ctrl+Alt+P`) +
+/// прапорець «увімкнено». Усі дефолтно ВИМКНЕНІ (`enabled = false`) — користувач
+/// свідомо вмикає потрібні (щоб не конфліктувати з гарячими клавішами інших програм).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HotkeyBinding {
+    /// Акселератор у форматі Tauri (`Ctrl+Alt+P`). Порожній → не реєструється.
+    pub accelerator: String,
+    /// Чи активна ця прив'язка.
+    pub enabled: bool,
+}
+
+/// Гарячі клавіші — по прив'язці на кожну дію (B1). Дефолтні акселератори
+/// неконфліктні (`Ctrl+Alt+…`), але всі ВИМКНЕНІ — реєструються лише ті, що
+/// `enabled` і з непорожнім акселератором.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HotkeysDto {
+    /// Пауза / відновлення.
+    pub pause_resume: HotkeyBinding,
+    /// Скасувати останнє перемикання.
+    pub revert_last: HotkeyBinding,
+    /// Примусово перемкнути розкладку.
+    pub manual_switch: HotkeyBinding,
+    /// ВЕРХНІЙ регістр виділення.
+    pub case_upper: HotkeyBinding,
+    /// нижній регістр виділення.
+    pub case_lower: HotkeyBinding,
+    /// Регістр речення для виділення.
+    pub case_sentence: HotkeyBinding,
+}
+
+impl Default for HotkeysDto {
+    fn default() -> Self {
+        // Розумні неконфліктні дефолти (Ctrl+Alt+…); усі вимкнені.
+        let off = |accel: &str| HotkeyBinding {
+            accelerator: accel.to_string(),
+            enabled: false,
+        };
+        Self {
+            pause_resume: off("Ctrl+Alt+P"),
+            revert_last: off("Ctrl+Alt+Z"),
+            manual_switch: off("Ctrl+Alt+S"),
+            case_upper: off("Ctrl+Alt+U"),
+            case_lower: off("Ctrl+Alt+L"),
+            case_sentence: off("Ctrl+Alt+E"),
+        }
+    }
+}
+
+impl HotkeysDto {
+    /// Прив'язка для конкретної дії (для роутингу/реєстрації в `hotkeys.rs`).
+    pub fn binding(&self, action: HotkeyAction) -> &HotkeyBinding {
+        match action {
+            HotkeyAction::PauseResume => &self.pause_resume,
+            HotkeyAction::RevertLast => &self.revert_last,
+            HotkeyAction::ManualSwitch => &self.manual_switch,
+            HotkeyAction::CaseUpper => &self.case_upper,
+            HotkeyAction::CaseLower => &self.case_lower,
+            HotkeyAction::CaseSentence => &self.case_sentence,
+        }
+    }
+
+    /// Обрізати пробіли в акселераторах (валідація вводу з UI).
+    fn sanitize(&mut self) {
+        for b in [
+            &mut self.pause_resume,
+            &mut self.revert_last,
+            &mut self.manual_switch,
+            &mut self.case_upper,
+            &mut self.case_lower,
+            &mut self.case_sentence,
+        ] {
+            b.accelerator = b.accelerator.trim().to_string();
+        }
+    }
+}
+
 /// Пороги детектора (advanced). Дзеркало майбутнього `DetectorConfig`.
 /// Значення за замовч. — консервативні (precision > recall).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -95,6 +204,8 @@ pub struct AppSettings {
     pub exclusions: ExclusionsDto,
     /// Винятки рівня слова (особистий словник: always/never switch).
     pub words: WordsDto,
+    /// Гарячі клавіші (B1): прив'язка-акселератор на кожну дію.
+    pub hotkeys: HotkeysDto,
     /// Пороги детектора (advanced).
     pub detection: DetectionDto,
 }
@@ -107,6 +218,7 @@ impl Default for AppSettings {
             language: LanguagePair::UkEn,
             exclusions: ExclusionsDto::default(),
             words: WordsDto::default(),
+            hotkeys: HotkeysDto::default(),
             detection: DetectionDto::default(),
         }
     }
@@ -125,6 +237,9 @@ impl AppSettings {
         // шляхів виключень, де регістр зберігаємо як ввів користувач).
         self.words.always_switch = dedup_nonempty_lower(self.words.always_switch);
         self.words.never_switch = dedup_nonempty_lower(self.words.never_switch);
+        // Хоткеї: лише обрізаємо пробіли в акселераторах (валідність формату
+        // перевіряє вже плагін під час реєстрації — невалідні просто не стають активними).
+        self.hotkeys.sanitize();
         // Тримаємо version у відомому діапазоні (на випадок підробленого файлу).
         if self.version == 0 {
             self.version = SCHEMA_VERSION;
@@ -309,6 +424,26 @@ mod tests {
         let s = s.sanitized();
         assert_eq!(s.words.always_switch, vec!["лох", "eurusd"]);
         assert_eq!(s.words.never_switch, vec!["vec"]);
+    }
+
+    #[test]
+    fn hotkeys_missing_field_falls_back_to_defaults() {
+        // Старий settings.json (до v2) без секції `hotkeys` читається без падіння.
+        let partial = r#"{ "enabled": true }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        assert_eq!(s.hotkeys, HotkeysDto::default());
+        // Усі дії вимкнені за замовчуванням.
+        assert!(HotkeyAction::ALL
+            .iter()
+            .all(|&a| !s.hotkeys.binding(a).enabled));
+    }
+
+    #[test]
+    fn hotkeys_sanitize_trims_accelerators() {
+        let mut s = AppSettings::default();
+        s.hotkeys.pause_resume.accelerator = "  Ctrl+Alt+P  ".into();
+        let s = s.sanitized();
+        assert_eq!(s.hotkeys.pause_resume.accelerator, "Ctrl+Alt+P");
     }
 
     #[test]

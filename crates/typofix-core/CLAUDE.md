@@ -388,3 +388,39 @@ Backspace (`scancode 0x0E`) має ТРИ значення; перевіряют
 Спецвипадки: **Ctrl+Backspace** (видалення слова) і **auto-repeat Backspace**
 ловляться раніше guard'ом командних комбінацій/повтору → інвалідація (не поп).
 Решта §3.4 (клік/стрілки/Home-End/виділення/фокус) лишається повною інвалідацією.
+
+## Гарячі клавіші B1: ручний відкат / примусове перемикання / регістр (готча!)
+
+**Неочевидне.** Три ПУБЛІЧНІ API ядра, які кличе `src-tauri` (не через `step`):
+`revert_last(&mut EngineState)`, `force_switch_last(&mut EngineState, &Context)`
+(обидва в `engine`, реекспорт із кореня крейта) і чиста `transform_case(&str,
+CaseMode) -> String` (`case.rs`, `CaseMode{Upper,Lower,Sentence}`).
+
+- **`PendingRetype` тепер несе ПОВНИЙ контекст відкату**, не лише слово:
+  `retyped_len` (символів перенабору на екрані), `original_full` (слово+суфікс+
+  роздільник для відновлення) і `restore_layout` (стара розкладка; `None` для
+  caps-only). `revert_last` бере лише `&mut EngineState` — уся інформація вже в
+  `pending` (заповнює `build_pending` у `handle_boundary`). Тому **порядок дій
+  відкату дзеркальний до перенабору**: `DeleteChars(retyped_len)` +
+  `SwitchLayout(стара)` (якщо була) + `TypeUnicode(original_full)` + `learn(word)`
+  + `CommitException(word)`. `CommitException`/`learn` — лише СЛОВО (`original_word`),
+  не `original_full` → learned-veto матчить слово, як і скрізь.
+- **`revert_last` = ЯВНИЙ аналог Backspace-rejection**, але не залежить від
+  наступної події (бере `pending.take()`); Backspace-гілка в `step` лишилась як є
+  (вона теж завчає, але НЕ відновлює текст — це робить лише `revert_last`). Якщо
+  `pending` порожній → `vec![]`.
+- **`force_switch_last` ОБХОДИТЬ УСЕ** (поріг/min_len/veto/learned) — ручна команда
+  користувача переважає всі гейти precision (на відміну від `decide`). Логіка —
+  `detector::force_decision`: найкращий НЕ-поточний кандидат за **LM** (не за повним
+  балом — нам не треба dict/freq, треба просто «інша мова»), `switch=true` завжди.
+  `None`, якщо нема поточного профілю або нема іншої мови. Працює з ПОТОЧНИМ
+  (не-завершеним) буфером — після завершення слова буфер скинуто, тож «останнє» =
+  те, що ще набирається; порожній буфер → `vec![]`. Тригериться без роздільника
+  (`separator=None`). **Виставляє `pending_retype`** → ручне перемикання теж
+  відкочується через `revert_last`. Поважає bypass виключеного вікна (як `step`).
+- **`transform_case` ЧИСТА; текст приходить ЗЗОВНІ** (виділення з ОС), НЕ з буфера
+  натискань. `Sentence` капіталізує перший АЛФАВІТНИЙ символ (провідні пробіли/лапки
+  лишає). Юнікод-коректно через `to_uppercase`/`to_lowercase`.
+- Стереже: `tests/hotkeys_b1.rs` (E2E через virtual: відкат відновлює РІВНО
+  оригінал+завчає, force ігнорує поріг на короткому слові, no-op кейси) + юніти
+  `case::tests::*`.

@@ -29,7 +29,7 @@ pub struct WordRules {
     short_service: Vec<(LayoutId, String)>,
     /// **Особистий словник користувача** (`data/dicts/user.txt`) — слова, які
     /// користувач хоче, щоб апка ВИЗНАВАЛА як валідні й ПЕРЕМИКАЛА на них (жаргон/
-    /// нікнейми поза стандартним словником, напр. `лох`). Це ПОЗИТИВНИЙ сигнал
+    /// нікнейми поза стандартним словником, напр. `вжух`). Це ПОЗИТИВНИЙ сигнал
     /// (НЕ veto): такі слова дають dict-бонус, як звичайний член словника. Мова не
     /// тегується (двійник у чужій розкладці — біліберда, тож не сплутаєш).
     recognized: Vec<String>,
@@ -219,10 +219,10 @@ mod tests {
     #[test]
     fn recognized_words_are_positive_and_case_insensitive() {
         let mut r = WordRules::new();
-        assert!(!r.recognizes("лох")); // порожній → нічого
-        r.recognize_word("Лох");
-        assert!(r.recognizes("лох")); // регістронезалежно
-        assert!(r.recognizes("ЛОХ"));
+        assert!(!r.recognizes("вжух")); // порожній → нічого
+        r.recognize_word("Вжух");
+        assert!(r.recognizes("вжух")); // регістронезалежно
+        assert!(r.recognizes("ВЖУХ"));
         assert!(!r.recognizes("світ"));
         assert!(!r.is_empty());
     }

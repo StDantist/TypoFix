@@ -76,7 +76,7 @@ pub struct ExclusionsDto {
 pub struct WordsDto {
     /// «Завжди перемикати» — позитивний особистий словник: слова, які апка має
     /// ВИЗНАВАТИ й перемикати на них (жаргон/нікнейми/forex поза стандартним
-    /// словником, напр. `лох`). Об'єднується з `data/dicts/user.txt`.
+    /// словником, напр. `вжух`). Об'єднується з `data/dicts/user.txt`.
     pub always_switch: Vec<String>,
     /// «Ніколи не перемикати» — per-word veto: слова, які лишати недоторканими.
     pub never_switch: Vec<String>,
@@ -494,15 +494,15 @@ mod tests {
     fn sanitize_words_trims_lowercases_and_dedups() {
         let mut s = AppSettings::default();
         s.words.always_switch = vec![
-            "Лох".into(),
-            "  лох  ".into(), // дубль після trim+lowercase
-            "ЛОХ".into(),     // дубль за регістром
-            "   ".into(),     // порожній
+            "Вжух".into(),
+            "  вжух  ".into(), // дубль після trim+lowercase
+            "ВЖУХ".into(),     // дубль за регістром
+            "   ".into(),      // порожній
             "EURUSD".into(),
         ];
         s.words.never_switch = vec!["Vec".into(), "vec".into()];
         let s = s.sanitized();
-        assert_eq!(s.words.always_switch, vec!["лох", "eurusd"]);
+        assert_eq!(s.words.always_switch, vec!["вжух", "eurusd"]);
         assert_eq!(s.words.never_switch, vec!["vec"]);
     }
 

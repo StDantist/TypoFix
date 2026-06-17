@@ -678,8 +678,8 @@ mod tests {
 
     #[test]
     fn user_words_parses_and_skips_comments() {
-        let words = parse_user_words("# хедер\nлох\n  крякозябри  \n\n# коментар\nEURUSD");
-        assert_eq!(words, vec!["лох", "крякозябри", "EURUSD"]);
+        let words = parse_user_words("# хедер\nвжух\n  крякозябри  \n\n# коментар\nEURUSD");
+        assert_eq!(words, vec!["вжух", "крякозябри", "EURUSD"]);
     }
 
     #[test]

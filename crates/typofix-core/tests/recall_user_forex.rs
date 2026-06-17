@@ -1,6 +1,6 @@
 //! Регресія двох ПОЗИТИВНИХ сигналів перемикання на реальних розкладках:
 //!  1. **Особистий словник** (`user.txt` → `WordRules::recognize_word`): слово,
-//!     якого НЕМАЄ у стандартному словнику (`лох`), користувач вписав як визнане
+//!     якого НЕМАЄ у стандартному словнику (`вжух`), користувач вписав як визнане
 //!     → дістає dict-бонус → перемикається.
 //!  2. **Forex-пари** (`iso4217.txt` → `WordRules::is_currency_pair`): валютна
 //!     пара, набрана у ВИПАДКОВО ввімкненій укр. розкладці, впевнено перемикається
@@ -71,30 +71,30 @@ fn personal_dictionary_word_switches() {
         return;
     };
     let uk = &langs[0].layout;
-    // Передумова тесту: «лох» НЕ у стандартному словнику (інакше тест беззмістовний).
-    if langs[0].dict.contains("лох") {
-        eprintln!("SKIP: 'лох' уже у словнику — особистий словник не потрібен");
+    // Передумова тесту: «вжух» НЕ у стандартному словнику (інакше тест беззмістовний).
+    if langs[0].dict.contains("вжух") {
+        eprintln!("SKIP: 'вжух' уже у словнику — особистий словник не потрібен");
         return;
     }
     let mut rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
-    rules.recognize_word("лох");
+    rules.recognize_word("вжух");
 
-    // «лох», набране в EN-розкладці → на екрані «kj[». Має перемкнутись на uk.
-    let d = detector::decide(&strokes_in(uk, "лох"), &ctx(&langs, "en", &rules));
+    // «вжух», набране в EN-розкладці → на екрані «d;e[». Має перемкнутись на uk.
+    let d = detector::decide(&strokes_in(uk, "вжух"), &ctx(&langs, "en", &rules));
     assert_eq!(d.best, LayoutId::new("uk"));
-    assert_eq!(d.best_text, "лох");
+    assert_eq!(d.best_text, "вжух");
     assert!(
         d.switch,
-        "user-слово 'лох' має перемкнутись (conf={:.2})",
+        "user-слово 'вжух' має перемкнутись (conf={:.2})",
         d.confidence
     );
 
     // Без особистого словника — НЕ ловиться (поза стандартним dict).
     let plain = typofix_data::eval::build_word_rules(&["uk", "en"]);
-    let d0 = detector::decide(&strokes_in(uk, "лох"), &ctx(&langs, "en", &plain));
+    let d0 = detector::decide(&strokes_in(uk, "вжух"), &ctx(&langs, "en", &plain));
     assert!(
         !d0.switch,
-        "без user.txt 'лох' не перемикати (conf={:.2})",
+        "без user.txt 'вжух' не перемикати (conf={:.2})",
         d0.confidence
     );
 }

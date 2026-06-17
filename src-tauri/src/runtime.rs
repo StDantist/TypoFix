@@ -805,13 +805,13 @@ mod tests {
     fn settings_words_map_to_recognized_and_veto_without_data_dir() {
         // Слова з налаштувань застосовуються навіть без data/ (не залежать від файлів).
         let words = WordsDto {
-            always_switch: vec!["лох".into(), "eurusd".into()],
+            always_switch: vec!["вжух".into(), "eurusd".into()],
             never_switch: vec!["vec".into()],
         };
         let rules = load_word_rules(LanguagePair::UkEn, None, &words);
         assert!(!rules.is_empty());
         // always_switch → recognized (позитив, регістронезалежно).
-        assert!(rules.recognizes("Лох"));
+        assert!(rules.recognizes("Вжух"));
         assert!(rules.recognizes("EURUSD"));
         // never_switch → veto (збіг із поточним АБО виправленим текстом).
         assert!(rules.vetoes("vec", "будь-що"));

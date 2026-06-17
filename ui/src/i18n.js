@@ -65,7 +65,7 @@ const messages = {
     "words.kind.never": "не чіпати",
     "words.list.always": "Завжди перемикати",
     "words.list.never": "Ніколи не перемикати",
-    "words.always.placeholder": "напр. лох, eurusd",
+    "words.always.placeholder": "напр. вжух, eurusd",
     "words.never.placeholder": "напр. vec, npm",
     "words.add.always": "Додати слово",
     "words.add.never": "Додати слово",

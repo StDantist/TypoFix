@@ -69,7 +69,7 @@ impl LanguageProfile {
     /// слово дає БІЛЬШИЙ бонус за рідкісне, і `ну`(часте) б'є `ye`(рідкісне).
     ///
     /// **Особистий словник:** `recognized` (з `ctx.rules.recognizes`) додає
-    /// dict-членність ПОЗА `LanguageProfile.dict` — слово з `user.txt` (`лох`)
+    /// dict-членність ПОЗА `LanguageProfile.dict` — слово з `user.txt` (`вжух`)
     /// дістає той самий baseline `dict_bonus`. Частоти в нього зазвичай немає
     /// (`freq.log_prob → None` → надбавка 0), тож рівно baseline.
     fn score(&self, text: &str, cfg: &DetectorConfig, recognized: bool) -> CandidateScore {
@@ -1783,20 +1783,21 @@ mod tests {
     }
 
     // --- Особистий словник (user.txt) = ПОЗИТИВНИЙ сигнал перемикання ----------
-    // Фіз-позиції: л=k(0x25), о=j(0x24), х=`[`(0x1A). «лох» закінчується на `х`,
-    // що в en — пунктуація `[` → задіює й дизамбігуацію пунктуації-літери.
+    // Фіз-позиції: в=d(0x20), ж=`;`(0x27), у=e(0x12), х=`[`(0x1A). «вжух» закінчується
+    // на `х`, що в en — пунктуація `[` → задіює й дизамбігуацію пунктуації-літери.
 
     fn user_en_profile() -> LanguageProfile {
         let layout = Layout::new(
             LayoutId::new("en"),
             [
-                (0x25, KeyCap::letter('k', 'K')),
-                (0x24, KeyCap::letter('j', 'J')),
+                (0x20, KeyCap::letter('d', 'D')),
+                (0x27, KeyCap::letter(';', ':')),
+                (0x12, KeyCap::letter('e', 'E')),
                 (0x1A, KeyCap::letter('[', '{')),
             ],
         );
-        let lm = NgramModel::train("key just kill keep", 3, 0.5);
-        let dict = Dictionary::from_words(["key", "just"]).unwrap();
+        let lm = NgramModel::train("deed dense desk ended", 3, 0.5);
+        let dict = Dictionary::from_words(["deed", "dense"]).unwrap();
         LanguageProfile {
             id: LayoutId::new("en"),
             layout,
@@ -1810,15 +1811,16 @@ mod tests {
         let layout = Layout::new(
             LayoutId::new("uk"),
             [
-                (0x25, KeyCap::letter('л', 'Л')),
-                (0x24, KeyCap::letter('о', 'О')),
+                (0x20, KeyCap::letter('в', 'В')),
+                (0x27, KeyCap::letter('ж', 'Ж')),
+                (0x12, KeyCap::letter('у', 'У')),
                 (0x1A, KeyCap::letter('х', 'Х')),
             ],
         );
-        let lm = NgramModel::train("лол хата холод охайо", 3, 0.5);
-        // «лох» НАВМИСНО поза стандартним словником (як у реалі: VESUM-фільтр) —
+        let lm = NgramModel::train("жук вуж важко хижа вухо", 3, 0.5);
+        // «вжух» НАВМИСНО поза стандартним словником (як у реалі: VESUM-фільтр) —
         // ловиться ЛИШЕ через особистий словник.
-        let dict = Dictionary::from_words(["хата", "холод"]).unwrap();
+        let dict = Dictionary::from_words(["жук", "вухо"]).unwrap();
         LanguageProfile {
             id: LayoutId::new("uk"),
             layout,
@@ -1832,24 +1834,24 @@ mod tests {
     fn user_word_switches_via_personal_dictionary() {
         let langs = [user_en_profile(), user_uk_profile()];
         let mut rules = WordRules::new();
-        rules.recognize_word("лох");
+        rules.recognize_word("вжух");
         let ctx = ctx_with_rules(&langs, "en", &rules);
-        let d = decide(&strokes(&[0x25, 0x24, 0x1A]), &ctx); // en "kj[" / uk "лох"
+        let d = decide(&strokes(&[0x20, 0x27, 0x12, 0x1A]), &ctx); // en "d;e[" / uk "вжух"
         assert_eq!(d.best, LayoutId::new("uk"));
-        assert_eq!(d.best_text, "лох");
+        assert_eq!(d.best_text, "вжух");
         assert!(
             d.switch,
             "user-слово має перемкнутися (conf={})",
             d.confidence
         );
 
-        // Контроль причинності: без особистого словника «лох» (поза dict) НЕ
+        // Контроль причинності: без особистого словника «вжух» (поза dict) НЕ
         // ловиться — саме user.txt його визнає.
         let plain = ctx_with(&langs, "en");
-        let d0 = decide(&strokes(&[0x25, 0x24, 0x1A]), &plain);
+        let d0 = decide(&strokes(&[0x20, 0x27, 0x12, 0x1A]), &plain);
         assert!(
             !d0.switch,
-            "без user.txt 'лох' (поза словником) не перемикати (conf={})",
+            "без user.txt 'вжух' (поза словником) не перемикати (conf={})",
             d0.confidence
         );
     }

@@ -11,6 +11,10 @@ description = "TypoFix — трей-застосунок (Tauri-оболонка
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.80"
+# Головний бінар для `tauri build`/`cargo run` — трей-апка. Без цього при кількох
+# [[bin]] Tauri бандлив би алфавітно перший (`live_engine` — демо-харнес).
+# `live_engine` лишається доступним через `cargo run --bin live_engine`.
+default-run = "typofix-app"
 
 [lib]
 # Tauri 2 будує логіку в бібліотеці (готовність до мобільних таргетів),

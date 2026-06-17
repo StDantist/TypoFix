@@ -17,12 +17,15 @@
 //! `InputEvent` прямо в цикл (той самий шлях логування+`step`, реальний
 //! `current_layout` від ОС) — це надійно відтворює сценарій для діагностики.
 //!
-//! Запуск (з кореня репо):
+//! Це приклад (`examples/`), а НЕ bin — навмисно, щоб `tauri build` його не бандлив
+//! у реліз (демо-харнес у продукті не потрібен). Запуск (src-tauri — ВІДОКРЕМЛЕНИЙ
+//! workspace, тож `-p typofix-app` із кореня НЕ працює) — з теки `src-tauri`:
 //! ```text
 //! $env:TYPOFIX_DATA_DIR = "d:\Projects\TypoFix\data"
-//! cargo run -p typofix-app --bin live_engine            # звичайний
-//! cargo run -p typofix-app --bin live_engine -- self    # самотест
+//! cargo run --example live_engine            # звичайний
+//! cargo run --example live_engine -- self    # самотест
 //! ```
+//! (з кореня репо — `cargo run --manifest-path src-tauri/Cargo.toml --example live_engine`).
 
 #[cfg(windows)]
 fn main() {

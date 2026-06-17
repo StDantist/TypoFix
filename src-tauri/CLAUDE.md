@@ -484,6 +484,11 @@ events, window show/hide/focus, `dialog:allow-open` (file-picker для exe/те
 `tauri-plugin-opener` — відкриття зовнішніх URL у системному браузері; **готча:**
 звичайний `<a target="_blank">` у webview НЕ відкриває браузер, тому лінк на GitHub
 у секції «Про застосунок» іде через JS `openUrl()` з `@tauri-apps/plugin-opener`,
-а сам `<a>` має `onclick` із `preventDefault`). Власні app-команди (`load_settings`/`save_settings`/
+а сам `<a>` має `onclick` із `preventDefault`). **Готча scope:** голий
+`"opener:allow-open-url"` БЕЗ scope відхиляє будь-який `openUrl` у рантаймі (клік
+«мовчить»). Потрібен об'єктний дозвіл зі scope:
+`{ "identifier": "opener:allow-open-url", "allow": [{ "url": "https://github.com/*" }] }`
+(поле `url`, glob за UNIX-патерном — звірено з `gen/schemas/acl-manifests.json`).
+Власні app-команди (`load_settings`/`save_settings`/
 `get_autostart`/`set_autostart`/`list_learned`/`remove_learned`/`clear_learned`)
 працюють у межах `core:default`. Додаєш плагін → додай його permission сюди.

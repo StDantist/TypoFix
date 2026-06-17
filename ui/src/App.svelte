@@ -127,8 +127,9 @@
   async function openGithub() {
     try {
       await openUrl(GITHUB_URL);
-    } catch {
-      // Тихо ігноруємо: лінк лишається виділним для копіювання вручну.
+    } catch (e) {
+      // Лінк лишається видирним для копіювання; логуємо, щоб збій не був німим.
+      console.error("openUrl failed", e);
     }
   }
 

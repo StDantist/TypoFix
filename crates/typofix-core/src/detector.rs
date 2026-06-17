@@ -1072,6 +1072,40 @@ mod tests {
     }
 
     #[test]
+    fn third_layout_current_is_never_switched() {
+        // Precision-замок: коли поточна розкладка НЕ серед профілів пари {uk,en},
+        // ми не знаємо, що насправді на екрані → жодного перемикання (свідомий ввід
+        // третьою мовою лишається недоторканим). Заслінку тримає `current.is_some()`
+        // у `decide` і `current_profile()?` у `force_decision`.
+        let langs = [en_profile(), uk_profile()];
+        let word = strokes(&[0x22, 0x23, 0x30, 0x20, 0x1F, 0x31]); // en "ghbdsn" / uk "привіт"
+
+        // Контроль: при ПАРНІЙ поточній ("en") ці ж страйки впевнено перемикають на uk.
+        let control = decide(&word, &ctx_with(&langs, "en"));
+        assert!(
+            control.switch,
+            "контроль: при поточній en страйки мають перемкнути (conf={})",
+            control.confidence
+        );
+        assert_eq!(control.best, LayoutId::new("uk"));
+        assert_eq!(control.best_text, "привіт");
+
+        // Третя розкладка ("ru") поточна — НЕ серед {uk,en}. Попри той самий
+        // «впевнений» ввід — нуль перемикання (авто і ручне).
+        let third = ctx_with(&langs, "ru");
+        let d = decide(&word, &third);
+        assert!(
+            !d.switch,
+            "третя розкладка поточна → не перемикати (conf={})",
+            d.confidence
+        );
+        assert!(
+            force_decision(&word, &third).is_none(),
+            "ручне перемикання без поточного профілю → None"
+        );
+    }
+
+    #[test]
     fn veto_word_blocks_high_score_switch() {
         let langs = [en_profile(), uk_profile()];
         let mut rules = WordRules::new();

@@ -35,7 +35,8 @@ pub use windows_impl::WindowsPlatform;
 #[cfg(windows)]
 pub use layout::{
     char_for_active_layout, char_for_layout, current_hkl_bits, current_layout_id,
-    installed_layout_ids, probe_layout_methods, LayoutProbe, MethodResult,
+    installed_layout_ids, installed_layouts, probe_layout_methods, InstalledLayout, LayoutProbe,
+    MethodResult,
 };
 #[cfg(windows)]
 pub use selection::get_selection_text;
@@ -43,7 +44,7 @@ pub use selection::get_selection_text;
 pub use window::foreground_window_info;
 
 #[cfg(not(windows))]
-pub use stub::WindowsPlatform;
+pub use stub::{installed_layouts, InstalledLayout, WindowsPlatform};
 
 #[cfg(windows)]
 mod windows_impl {
@@ -123,6 +124,19 @@ mod stub {
     /// Заглушка для не-Windows цілей: компілюється, але нічого не робить.
     #[derive(Debug, Default)]
     pub struct WindowsPlatform;
+
+    /// Дзеркало `layout::InstalledLayout` для не-Windows (порт розкладок — згодом).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct InstalledLayout {
+        pub name: String,
+        pub primary_langid: u16,
+        pub is_active: bool,
+    }
+
+    /// На не-Windows розкладок ОС не перелічуємо — порожньо.
+    pub fn installed_layouts() -> Vec<InstalledLayout> {
+        Vec::new()
+    }
 
     impl WindowsPlatform {
         pub fn new() -> Self {

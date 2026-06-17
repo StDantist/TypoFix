@@ -70,6 +70,25 @@ const messages = {
     "words.add.always": "Додати слово",
     "words.add.never": "Додати слово",
 
+    // Розкладки клавіатури (візуалізація: які дві TypoFix використовує)
+    "section.layouts.title": "Розкладки клавіатури",
+    "section.layouts.desc":
+      "Встановлені в системі розкладки. TypoFix працює лише з двома (поточна мовна пара); решту не чіпає.",
+    "layouts.refresh": "Оновити",
+    "layouts.badge.used": "використовується",
+    "layouts.badge.ignored": "ігнорується",
+    "layouts.active": "активна",
+    "layouts.explain.lead": "TypoFix перемикає лише між",
+    "layouts.explain.and": "та",
+    "layouts.explain.tail": ". Інші розкладки не чіпаються.",
+    "layouts.missing.lead": "Розкладку",
+    "layouts.missing.tail":
+      "не встановлено — перемикання на неї не працюватиме. Додайте її в розкладках Windows.",
+    "layouts.lang.uk": "українську",
+    "layouts.lang.en": "англійську",
+    "layouts.none": "Розкладок не знайдено.",
+    "layouts.error": "Не вдалося отримати список розкладок.",
+
     // Системне (B5): автозапуск
     "section.system.title": "Системне",
     "section.system.desc": "Інтеграція з операційною системою.",

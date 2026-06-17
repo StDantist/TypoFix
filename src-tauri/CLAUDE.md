@@ -306,6 +306,31 @@ kebab-ключ `uk-en`). Єдина зв'язка «пара → мови» — 
 ВСТАНОВЛЕНИХ розкладок) теж не знають конкретних мов. Зміна пари в UI → `save_settings`
 → `sync_runtime` перезапускає движок із новими профілями.
 
+## Розкладки клавіатури (візуалізація — секція «Розкладки клавіатури»)
+ЛИШЕ показ/переконливість: користувач БАЧИТЬ встановлені в ОС розкладки, дві з яких
+TypoFix використовує (мови активної пари), і що решта ігнорується. **Логіку
+перемикання НЕ зачіпає** (вона вже коректно ігнорує третю розкладку).
+- **Команда `list_keyboard_layouts() -> Vec<KeyboardLayoutDto>`** (`lib.rs`). DTO:
+  `{ name: String, langid: String ("0x0022"), role: "uk"|"en"|"ignored", active: bool }`.
+  Бере мови активної пари (`AppState.settings.language.langs()`), кличе
+  `installed_layouts()`, і для кожної розкладки зіставляє її `primary_langid` із
+  мовами пари: збіг → `role` = мова, інакше `"ignored"`. Працює в межах `core:default`
+  (новий permission НЕ потрібен). Не-Windows → порожньо. Обгортка `listKeyboardLayouts`
+  у `api.js`.
+- **Мапінг `lang → primary_langid`** — `primary_langid_for` у `lib.rs` (єдине джерело
+  на app-шарі): `uk`→`0x22`, `en`→`0x09`. Додаєш мову в `LanguagePair` → додай і сюди.
+- **Джерело даних — платформа:** `layout_dtos` (cfg windows) кличе
+  `typofix_platform_windows::installed_layouts() -> Vec<InstalledLayout{ name,
+  primary_langid, is_active }>` (реекспорт із крейта; є windows + non-windows стаб).
+  На не-Windows src-tauri не залежить від крейта → `layout_dtos` повертає порожньо.
+- **UI** (`App.svelte`, картка `data-testid="card-layouts"`): список розкладок (назва +
+  langid + «● активна»), бейдж «використовується» на ролях uk/en і приглушений
+  «ігнорується» на решті (`li.ignored` — opacity); пояснення «TypoFix перемикає лише
+  між <uk> та <en>…» (коли обидві є); кнопка «Оновити» (`layouts-refresh`). **Попередження
+  про відсутню мову:** `missingLangs` рахується в UI (мова пари без жодної розкладки тієї
+  ролі) → «Розкладку <мову> не встановлено — …» (`data-testid="layouts-missing"`).
+  i18n — `layouts.*`/`section.layouts.*`.
+
 ### ЧЕКЛИСТ: як додати мовну пару (напр. `pl-en`)
 1. **Дані** в `data/` для КОЖНОЇ мови пари (через наявні loader'и, крейти НЕ чіпати):
    `layouts/{lang}.toml`, `lm/{lang}.bin`, `dicts/{lang}.fst` (+ опц.

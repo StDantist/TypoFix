@@ -13,6 +13,7 @@
     listLearned,
     removeLearned,
     clearLearned,
+    listKeyboardLayouts,
   } from "./lib/api.js";
   import Toggle from "./lib/Toggle.svelte";
   import RuleList from "./lib/RuleList.svelte";
@@ -130,6 +131,31 @@
   let learned = $state([]);
   let learnedError = $state(false);
 
+  // Розкладки клавіатури (візуалізація): встановлені в ОС розкладки + ролі.
+  // Окремий від `settings` стан — це знімок ОС, не конфіг.
+  /** @type {import("./lib/api.js").KeyboardLayoutDto[]} */
+  let layouts = $state([]);
+  let layoutsError = $state(false);
+
+  // Розкладки двох мов активної пари, які TypoFix реально використовує.
+  const usedUk = $derived(layouts.find((l) => l.role === "uk"));
+  const usedEn = $derived(layouts.find((l) => l.role === "en"));
+  // Мови пари, для яких НЕ встановлено розкладку (перемикання на них не працює).
+  const missingLangs = $derived(
+    settings.language
+      .split("-")
+      .filter((lang) => !layouts.some((l) => l.role === lang)),
+  );
+
+  async function reloadLayouts() {
+    try {
+      layouts = await listKeyboardLayouts();
+      layoutsError = false;
+    } catch {
+      layoutsError = true;
+    }
+  }
+
   async function reloadLearned() {
     try {
       learned = await listLearned();
@@ -217,6 +243,7 @@
   onMount(() => {
     reload();
     reloadLearned();
+    reloadLayouts();
     // Стан автозапуску читаємо з плагіна (реєстр — джерело істини), не з конфігу.
     getAutostart()
       .then((on) => {
@@ -342,6 +369,57 @@
       <option value="uk-en">{$t("language.uk-en")}</option>
     </select>
     <p class="hint lang-note">{$t("section.language.note")}</p>
+  </section>
+
+  <!-- Розкладки клавіатури (візуалізація: які дві TypoFix використовує) -->
+  <section class="card" data-testid="card-layouts">
+    <div class="layouts-head">
+      <h2>{$t("section.layouts.title")}</h2>
+      <button type="button" onclick={reloadLayouts} data-testid="layouts-refresh">
+        {$t("layouts.refresh")}
+      </button>
+    </div>
+    <p class="desc">{$t("section.layouts.desc")}</p>
+
+    {#if layoutsError}
+      <p class="err">{$t("layouts.error")}</p>
+    {:else if layouts.length === 0}
+      <p class="muted">{$t("layouts.none")}</p>
+    {:else}
+      <ul class="layouts-list" data-testid="layouts-list">
+        {#each layouts as l, i (i)}
+          <li class:ignored={l.role === "ignored"}>
+            <code class="lay-name" title={l.name}>{l.name}</code>
+            <span class="lay-id">{l.langid}</span>
+            {#if l.active}
+              <span class="lay-active">● {$t("layouts.active")}</span>
+            {/if}
+            {#if l.role === "ignored"}
+              <span class="lay-badge ignored">{$t("layouts.badge.ignored")}</span>
+            {:else}
+              <span class="lay-badge used">{$t("layouts.badge.used")}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+
+      {#if usedUk && usedEn}
+        <p class="layouts-explain" data-testid="layouts-explain">
+          {$t("layouts.explain.lead")}
+          <strong>{usedUk.name}</strong>
+          {$t("layouts.explain.and")}
+          <strong>{usedEn.name}</strong>{$t("layouts.explain.tail")}
+        </p>
+      {/if}
+
+      {#each missingLangs as lang (lang)}
+        <p class="err" data-testid="layouts-missing">
+          {$t("layouts.missing.lead")}
+          {$t(`layouts.lang.${lang}`)}
+          {$t("layouts.missing.tail")}
+        </p>
+      {/each}
+    {/if}
   </section>
 
   <!-- Виключення -->
@@ -1021,6 +1099,87 @@
     color: var(--text-dim);
     font-size: 0.78rem;
     text-align: center;
+  }
+
+  /* Розкладки клавіатури */
+  .layouts-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .layouts-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .layouts-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.5rem;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+
+  /* Ігноровані розкладки — приглушено (видно, що TypoFix їх не чіпає). */
+  .layouts-list li.ignored {
+    opacity: 0.55;
+  }
+
+  .layouts-list .lay-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: text;
+    font-size: 0.88rem;
+  }
+
+  .layouts-list .lay-id {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+
+  .layouts-list .lay-active {
+    flex: none;
+    font-size: 0.75rem;
+    color: #3ba55d;
+    white-space: nowrap;
+  }
+
+  .layouts-list .lay-badge {
+    flex: none;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+  }
+
+  .layouts-list .lay-badge.used {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+
+  .layouts-list .lay-badge.ignored {
+    color: var(--text-dim);
+    background: color-mix(in srgb, var(--text-dim) 16%, transparent);
+  }
+
+  .layouts-explain {
+    margin: 0.75rem 0 0;
+    font-size: 0.85rem;
+    color: var(--text-dim);
   }
 
   /* Модалка підтвердження скидання */

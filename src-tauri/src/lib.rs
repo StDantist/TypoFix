@@ -397,6 +397,19 @@ struct ProcessEntry {
     has_window: bool,
 }
 
+/// Одна встановлена в ОС розкладка для секції «Розкладки клавіатури» (візуалізація).
+/// `role`: `"uk"`/`"en"` (одна з мов активної пари — TypoFix її ВИКОРИСТОВУЄ) або
+/// `"ignored"` (будь-яка інша — TypoFix її не чіпає). `langid` — primary langid у hex
+/// (`"0x0022"` укр., `"0x0009"` англ.). `active` — поточна активна розкладка.
+/// Приватність: лише назви/ідентифікатори розкладок, локально; нічого не зберігаємо.
+#[derive(Debug, Clone, serde::Serialize)]
+struct KeyboardLayoutDto {
+    name: String,
+    langid: String,
+    role: String,
+    active: bool,
+}
+
 /// Кеш іконок за exe-шляхом (процес-глобальний). Витяг через shell повільнуватий
 /// (~1–2 мс/exe), а застосунків десятки — тож «Оновити список» не перевитягує вже
 /// відомі. Значення `None` теж кешуємо (негативний кеш: не довбати exe без іконки).
@@ -724,6 +737,60 @@ fn list_running_processes() -> Result<Vec<ProcessEntry>, String> {
     Ok(entries)
 }
 
+/// Primary langid (low-10 bits LANGID) для мови пари. Єдине джерело істини мапінгу
+/// «мова → langid» на app-шарі (платформа віддає `primary_langid: u16` розкладки;
+/// тут зіставляємо його з мовами активної пари для визначення ролі).
+/// Додаєш мову в `LanguagePair` → додай її primary langid сюди.
+fn primary_langid_for(lang: &str) -> Option<u16> {
+    match lang {
+        "uk" => Some(0x22), // українська (PRIMARYLANGID LANG_UKRAINIAN)
+        "en" => Some(0x09), // англійська (PRIMARYLANGID LANG_ENGLISH)
+        _ => None,
+    }
+}
+
+/// Команда: перелік ВСТАНОВЛЕНИХ в ОС розкладок із роллю відносно активної мовної
+/// пари (`"uk"`/`"en"` — TypoFix використовує; `"ignored"` — не чіпає). Чисто для
+/// візуалізації/переконливості — логіку перемикання НЕ зачіпає. Працює в межах
+/// `core:default` (як `load_settings`) — нового permission не треба. Не-Windows → порожньо.
+#[tauri::command]
+fn list_keyboard_layouts(state: State<'_, AppState>) -> Vec<KeyboardLayoutDto> {
+    let langs = state
+        .settings
+        .lock()
+        .expect("AppState отруєно")
+        .language
+        .langs();
+    layout_dtos(&langs)
+}
+
+#[cfg(not(windows))]
+fn layout_dtos(_langs: &[&str; 2]) -> Vec<KeyboardLayoutDto> {
+    Vec::new()
+}
+
+/// Зібрати DTO зі встановлених розкладок ОС, проставивши роль за primary langid.
+/// Джерело — платформна `typofix_platform_windows::installed_layouts()`.
+#[cfg(windows)]
+fn layout_dtos(langs: &[&str; 2]) -> Vec<KeyboardLayoutDto> {
+    typofix_platform_windows::installed_layouts()
+        .into_iter()
+        .map(|il| {
+            let role = langs
+                .iter()
+                .find(|l| primary_langid_for(l) == Some(il.primary_langid))
+                .map(|l| (*l).to_string())
+                .unwrap_or_else(|| "ignored".to_string());
+            KeyboardLayoutDto {
+                name: il.name,
+                langid: format!("0x{:04X}", il.primary_langid),
+                role,
+                active: il.is_active,
+            }
+        })
+        .collect()
+}
+
 /// Команда: прочитати конфіг із диска (джерело істини) й оновити in-memory.
 #[tauri::command]
 fn load_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, String> {
@@ -803,6 +870,7 @@ pub fn run() {
             save_settings,
             reset_settings,
             list_running_processes,
+            list_keyboard_layouts,
             get_autostart,
             set_autostart,
             list_learned,

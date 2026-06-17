@@ -12,6 +12,9 @@
 //!   ([`flush_dead_key`]). Так запит лишається без побічних ефектів.
 
 use typofix_platform::{LayoutId, Modifiers};
+use windows_sys::Win32::Globalization::{
+    GetLocaleInfoEx, LCIDToLocaleName, LOCALE_SLOCALIZEDLANGUAGENAME,
+};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardLayout, GetKeyboardLayoutList, MapVirtualKeyExW, ToUnicodeEx, HKL, MAPVK_VK_TO_VSC,
@@ -228,6 +231,72 @@ pub fn installed_layout_ids() -> Vec<LayoutId> {
         .collect()
 }
 
+/// Одна встановлена в ОС розкладка з **людською** назвою мови — для UI, де
+/// користувач бачить, які розкладки є і яку пару TypoFix використовує.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledLayout {
+    /// Локалізована назва мови («Українська», «English», «Русский»…); якщо
+    /// дістати з ОС не вдалося — `0x{langid:04x}` як fallback.
+    pub name: String,
+    /// `PRIMARYLANGID` (молодші 10 біт langid): `en`=0x09, `uk`=0x22 — збігається
+    /// для будь-якого варіанта мови. Дає змогу UI звʼязати розкладку з нашою парою.
+    pub primary_langid: u16,
+    /// Чи саме ця розкладка зараз активна (= [`current_hkl`]).
+    pub is_active: bool,
+}
+
+/// Перелік **усіх уже встановлених** розкладок ОС із людськими назвами.
+///
+/// Через `GetKeyboardLayoutList` (нічого НЕ інсталює). Дублі однакового langid
+/// (напр. дві англійські розкладки) **лишаються обидва** — користувач має бачити
+/// варіанти. Назва — через `LCIDToLocaleName`→`GetLocaleInfoEx`
+/// (`LOCALE_SLOCALIZEDLANGUAGENAME`); недоступна → hex-langid.
+pub fn installed_layouts() -> Vec<InstalledLayout> {
+    let current = current_hkl();
+    installed_hkls()
+        .into_iter()
+        .map(|hkl| {
+            let langid = (hkl as usize & 0xFFFF) as u16;
+            InstalledLayout {
+                name: language_name_for_langid(langid).unwrap_or_else(|| format!("0x{langid:04x}")),
+                primary_langid: primary_langid(langid),
+                is_active: hkl == current,
+            }
+        })
+        .collect()
+}
+
+/// Локалізована назва мови за `langid` через Win32 locale-API. `None`, якщо ОС
+/// не дала ні BCP-47-імені локалі, ні назви мови.
+fn language_name_for_langid(langid: u16) -> Option<String> {
+    unsafe {
+        // langid → BCP-47 ім'я локалі (напр. "uk-UA"). LCID = langid (SORT_DEFAULT).
+        let mut locale = [0u16; 85]; // LOCALE_NAME_MAX_LENGTH
+        let n = LCIDToLocaleName(langid as u32, locale.as_mut_ptr(), locale.len() as i32, 0);
+        if n <= 0 {
+            return None;
+        }
+        // Ім'я локалі → локалізована назва мови ("Українська"/"English"/...).
+        let mut buf = [0u16; 128];
+        let got = GetLocaleInfoEx(
+            locale.as_ptr(),
+            LOCALE_SLOCALIZEDLANGUAGENAME,
+            buf.as_mut_ptr(),
+            buf.len() as i32,
+        );
+        if got <= 0 {
+            return None;
+        }
+        // `got` включає завершальний NUL — відкидаємо його.
+        let s = String::from_utf16_lossy(&buf[..(got as usize - 1)]);
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    }
+}
+
 /// Список `HKL` усіх **уже встановлених** розкладок (через `GetKeyboardLayoutList`).
 /// Нічого не інсталює.
 fn installed_hkls() -> Vec<HKL> {
@@ -394,5 +463,25 @@ mod tests {
         // Не знаємо, яка саме активна, але виклик має не панікувати й дати щось.
         let id = current_layout_id();
         assert!(!id.as_str().is_empty());
+    }
+
+    #[test]
+    fn installed_layouts_lists_machine_layouts() {
+        let layouts = installed_layouts();
+        // Друк для живої діагностики (видно під `-- --nocapture`).
+        for l in &layouts {
+            println!(
+                "розкладка: name={:?} primary_langid=0x{:02x} active={}",
+                l.name, l.primary_langid, l.is_active
+            );
+        }
+        // На реальній машині розкладок ≥1; рівно стільки ж, скільки HKL.
+        assert_eq!(layouts.len(), installed_layout_ids().len());
+        if !layouts.is_empty() {
+            // Активна рівно одна (та сама, що current_layout_id).
+            assert_eq!(layouts.iter().filter(|l| l.is_active).count(), 1);
+            // Кожна назва непорожня (людська або hex-fallback).
+            assert!(layouts.iter().all(|l| !l.name.is_empty()));
+        }
     }
 }

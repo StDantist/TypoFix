@@ -131,6 +131,23 @@ export function clearLearned() {
   return invoke("clear_learned");
 }
 
+/**
+ * @typedef {Object} KeyboardLayoutDto
+ * @property {string} name   людська назва розкладки/мови (локаль ОС), напр. "англійська (США)"
+ * @property {string} langid primary langid у hex, напр. "0x0022" (укр.), "0x0009" (англ.)
+ * @property {"uk"|"en"|"ignored"} role роль відносно активної пари: мова пари або "ignored"
+ * @property {boolean} active чи це поточна активна розкладка ОС
+ */
+
+/**
+ * Перелік ВСТАНОВЛЕНИХ в ОС розкладок із роллю відносно активної мовної пари
+ * (для секції «Розкладки клавіатури»). Не-Windows → порожньо.
+ * @returns {Promise<KeyboardLayoutDto[]>}
+ */
+export function listKeyboardLayouts() {
+  return invoke("list_keyboard_layouts");
+}
+
 /** Діалог вибору теки. @returns {Promise<string|null>} */
 export async function pickFolder() {
   const res = await open({ directory: true, multiple: false });

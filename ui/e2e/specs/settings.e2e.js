@@ -112,6 +112,22 @@ describe("TypoFix — вікно налаштувань (UI-e2e)", () => {
     expect(await select.getValue()).toBe("uk-en");
   });
 
+  it("секція «Розкладки клавіатури» рендериться зі щонайменше однією розкладкою", async () => {
+    const card = await tid("card-layouts");
+    const h2 = await card.$("h2");
+    expect(await h2.getText()).toContain("Розкладки клавіатури");
+    // На реальній Windows-машині встановлена принаймні одна розкладка (англ.).
+    const list = await tid("layouts-list");
+    const items = await list.$$("li");
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    // Кнопка «Оновити» працює без помилки (список лишається непорожнім).
+    await clickCentered(await tid("layouts-refresh"));
+    await browser.waitUntil(async () => (await list.$$("li")).length >= 1, {
+      timeout: 5000,
+      timeoutMsg: "після оновлення список розкладок порожній",
+    });
+  });
+
   it("клік «Зберегти» не дає помилки", async () => {
     // Робимо форму «брудною» (вмикаємо Save): перемикаємо тоггл звуку в картці.
     const soundLabel = await $('[data-testid="card-feedback"] .toggle');

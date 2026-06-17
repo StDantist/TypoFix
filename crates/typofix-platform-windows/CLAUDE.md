@@ -97,6 +97,18 @@
     глобальний, два паралельні clipboard-тести гонилися б за ним і падали.
     Виклик передбачено з ОДНОГО потоку движка (не конкурентно).
 
+## `installed_layouts()` — перелік розкладок ОС із людськими назвами (для UI)
+`installed_layouts() -> Vec<InstalledLayout{ name, primary_langid, is_active }>`
+(реекспорт із lib.rs; не-Windows — `vec![]`). HKL з `GetKeyboardLayoutList`
+(нічого НЕ інсталює), назва — `LCIDToLocaleName(langid)`→`GetLocaleInfoEx(
+LOCALE_SLOCALIZEDLANGUAGENAME)`, fallback `0x{langid:04x}`. Дублі langid лишаємо
+(користувач має бачити варіанти). `is_active` = HKL == `current_hkl()`.
+- ⚠️ **Назва локалізується під мову UI Windows, НЕ під саму мову розкладки:** на
+  англомовній Windows uk-розкладка зветься `"Ukrainian"`, не `"Українська"`
+  (`SLOCALIZEDLANGUAGENAME` = «як називає цю мову поточний UI»). Це коректно для UI
+  застосунку (єдина мова інтерфейсу). Якщо колись треба ендонім — `LOCALE_SNATIVELANGUAGENAME`.
+- `primary_langid` (0x09/0x22…) дає src-tauri звʼязати розкладку з нашою парою.
+
 ## Що перевірено автоматично (частина A, безпечно, без вводу в систему)
 `cargo test -p typofix-platform-windows` (15 тестів) реально б'є по WinAPI:
 - `ToUnicodeEx` серед **уже встановлених** розкладок (`installed_hkl_for_layout_id`,

@@ -30,6 +30,13 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {string[]} always_switch
  * @property {string[]} never_switch
  *
+ * @typedef {Object} Behavior
+ * @property {boolean} fix_case
+ * @property {boolean} forex
+ * @property {boolean} recognize_extensions
+ * @property {boolean} phonotactics
+ * @property {boolean} fix_capslock
+ *
  * @typedef {Object} AppSettings
  * @property {number} version
  * @property {boolean} enabled
@@ -37,6 +44,7 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {Exclusions} exclusions
  * @property {Words} words
  * @property {Hotkeys} hotkeys
+ * @property {Behavior} behavior
  * @property {Detection} detection
  */
 

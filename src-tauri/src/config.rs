@@ -21,8 +21,9 @@ use tauri::{AppHandle, Manager};
 pub const SETTINGS_FILE: &str = "settings.json";
 
 /// Поточна версія схеми конфігу (для майбутніх міграцій).
-/// v2 додав секцію `hotkeys` (бекворд-сумісно: відсутнє поле → дефолт через `serde(default)`).
-pub const SCHEMA_VERSION: u32 = 2;
+/// v2 додав секцію `hotkeys`, v3 — `behavior` (бекворд-сумісно: відсутнє поле →
+/// дефолт через `serde(default)`).
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Мовна пара. Поки фіксовано uk↔en, але закладено в модель як enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -190,6 +191,38 @@ impl Default for DetectionDto {
     }
 }
 
+/// Перемикачі поведінки детектора (B4) — людські on/off для окремих евристик.
+/// Кожен дзеркалить відповідний `*_enabled`-прапорець `DetectorConfig`; мапінг —
+/// у [`crate::runtime::detector_config_from`]. **Усі default `true`** = поточна
+/// (повна) поведінка, тож старий `settings.json` без секції нічого не змінює.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BehaviorDto {
+    /// Виправляти регістр від перетриманого Shift (`ПРивіт→Привіт`). → `case_fix_enabled`.
+    pub fix_case: bool,
+    /// Forex-режим: валютні пари / коди ISO 4217. → `forex_enabled`.
+    pub forex: bool,
+    /// Розпізнавати файлові розширення (`.txt`/`.md`…). → `extensions_enabled`.
+    pub recognize_extensions: bool,
+    /// Фонотактика (укр. неможливі сполуки, напр. ь на початку). → `phonotactics_enabled`.
+    pub phonotactics: bool,
+    /// Виправляти випадковий CapsLock. → `capslock_fix_enabled`.
+    pub fix_capslock: bool,
+}
+
+impl Default for BehaviorDto {
+    fn default() -> Self {
+        // Усе ввімкнено = поточна поведінка детектора (бек-сумісність).
+        Self {
+            fix_case: true,
+            forex: true,
+            recognize_extensions: true,
+            phonotactics: true,
+            fix_capslock: true,
+        }
+    }
+}
+
 /// Кореневий DTO налаштувань, який серіалізується у `settings.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -206,6 +239,8 @@ pub struct AppSettings {
     pub words: WordsDto,
     /// Гарячі клавіші (B1): прив'язка-акселератор на кожну дію.
     pub hotkeys: HotkeysDto,
+    /// Перемикачі поведінки детектора (B4): on/off окремих евристик.
+    pub behavior: BehaviorDto,
     /// Пороги детектора (advanced).
     pub detection: DetectionDto,
 }
@@ -219,6 +254,7 @@ impl Default for AppSettings {
             exclusions: ExclusionsDto::default(),
             words: WordsDto::default(),
             hotkeys: HotkeysDto::default(),
+            behavior: BehaviorDto::default(),
             detection: DetectionDto::default(),
         }
     }
@@ -436,6 +472,20 @@ mod tests {
         assert!(HotkeyAction::ALL
             .iter()
             .all(|&a| !s.hotkeys.binding(a).enabled));
+    }
+
+    #[test]
+    fn behavior_missing_field_defaults_all_enabled() {
+        // Старий settings.json (до v3) без секції `behavior` → усі тоггли увімкнені
+        // (поточна поведінка детектора зберігається).
+        let partial = r#"{ "enabled": true }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        assert_eq!(s.behavior, BehaviorDto::default());
+        assert!(s.behavior.fix_case);
+        assert!(s.behavior.forex);
+        assert!(s.behavior.recognize_extensions);
+        assert!(s.behavior.phonotactics);
+        assert!(s.behavior.fix_capslock);
     }
 
     #[test]

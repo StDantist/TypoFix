@@ -164,6 +164,19 @@ pub struct DetectorConfig {
     /// кандидата — відоме розширення (`txt`/`md`), а укр. читання НЕ реальне слово
     /// → перемкнути на латиницю. Вимкнення → сигнал ігнорується (UI-тогл).
     pub extensions_enabled: bool,
+    /// **Прапорець корекції регістру від перетриманого Shift** (default `true`).
+    /// Гейтить наявне `ПРивіт→Привіт` (див. [`overheld_shift_fix`]). Коли `false`
+    /// — case-fix не застосовується (UI-тогл B4).
+    pub case_fix_enabled: bool,
+    /// **Прапорець Forex-логіки** (default `true`). Гейтить розпізнавання валютних
+    /// пар ISO 4217 (`EURUSD`). Коли `false` — forex-сигнал вимкнено (UI-тогл B4).
+    pub forex_enabled: bool,
+    /// **Прапорець виправлення випадкового CapsLock** (default `true`). НОВЕ
+    /// правило: слово з ІНВЕРТОВАНИМ регістром (перша мала, решта великі —
+    /// `пРИВІТ`/`hELLO`), чий інвертований варіант — реальне слово, виправляється
+    /// на нормалізований (`Привіт`/`Hello`). Коли `false` — правило вимкнено.
+    /// Див. [`capslock_fix`].
+    pub capslock_fix_enabled: bool,
 }
 
 impl Default for DetectorConfig {
@@ -183,6 +196,9 @@ impl Default for DetectorConfig {
             phonotactics_enabled: true,
             phonotactic_twin_lm_margin: 0.0,
             extensions_enabled: true,
+            case_fix_enabled: true,
+            forex_enabled: true,
+            capslock_fix_enabled: true,
         }
     }
 }
@@ -360,19 +376,23 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // безпечно. Фільтр `p.id != current_layout` лишає КОРЕКТНО набрану латиницею
     // пару недоторканою (best == current → не перемикаємо). Перемога forex форсить
     // перемикання в обхід порогу/довжини (але НЕ veto і НЕ best≠current).
-    let forex = ctx
-        .languages
-        .iter()
-        .filter(|p| p.id != ctx.current_layout)
-        .find_map(|p| {
-            let text = p.layout.interpret(strokes);
-            if ctx.rules.is_currency_pair(&text) {
-                let sc = p.score(&text, cfg, false);
-                Some((p.id.clone(), text, sc))
-            } else {
-                None
-            }
-        });
+    let forex = cfg
+        .forex_enabled
+        .then(|| {
+            ctx.languages
+                .iter()
+                .filter(|p| p.id != ctx.current_layout)
+                .find_map(|p| {
+                    let text = p.layout.interpret(strokes);
+                    if ctx.rules.is_currency_pair(&text) {
+                        let sc = p.score(&text, cfg, false);
+                        Some((p.id.clone(), text, sc))
+                    } else {
+                        None
+                    }
+                })
+        })
+        .flatten();
     let forex_forced = forex.is_some();
     if let Some((lang, text, sc)) = forex {
         best = lang;
@@ -559,11 +579,71 @@ fn overheld_shift_fix(word: &str, current: &LanguageProfile) -> Option<String> {
     }
 }
 
-/// Накласти корекцію регістру (перетриманий Shift) на рішення, що НЕ перемикає
-/// розкладку. Якщо детектор уже вирішив перемкнути мову — це основний кейс, його
-/// лишаємо (комбінований layout+caps кейс — свідомий follow-up, без подвійних
-/// суперечливих дій). Інакше: слово вже в правильній мові, і якщо його регістр
-/// має патерн перетриманого Shift, перетворюємо рішення на чисту caps-корекцію.
+/// Розпізнати помилку **випадкового CapsLock** і повернути нормалізований регістр.
+///
+/// Патерн ІНВЕРТОВАНОГО регістру (слід CapsLock: Shift на першій літері дає малу,
+/// решта без Shift — великі): **перша літера МАЛА, усі решта алфавітних — ВЕЛИКІ**
+/// (`пРИВІТ`, `hELLO`). Нормалізація — **інвертувати регістр кожної літери** →
+/// `Привіт`/`Hello`. Це окремо від [`overheld_shift_fix`] (той — провідні великі).
+///
+/// **Precision-замок (словник):** повертаємо `Some` ЛИШЕ якщо інвертований
+/// варіант — РЕАЛЬНЕ слово у словнику поточної мови. Інакше `None`.
+///
+/// **Не-патерни (повертають `None`):** ALL-CAPS акроніми (`USD`/`EUR`/`API` —
+/// перша літера ВЕЛИКА → не патерн), легітимний mixed-case (`iOS`/`iPhone` — хвіст
+/// має малі літери, або інвертований варіант не у словнику), одно-літерне.
+fn capslock_fix(word: &str, current: &LanguageProfile) -> Option<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() < 2 {
+        return None;
+    }
+    // Перша літера має бути МАЛОЮ (слід Shift+CapsLock на першій літері).
+    if !chars[0].is_lowercase() {
+        return None;
+    }
+    // Решта алфавітних — усі ВЕЛИКІ, і їх щонайменше одна. Будь-яка мала літера в
+    // хвості → мішаний регістр (не слід CapsLock, напр. `iPhone`) → не патерн.
+    let mut saw_upper = false;
+    for c in &chars[1..] {
+        if c.is_alphabetic() {
+            if c.is_lowercase() {
+                return None;
+            }
+            saw_upper = true;
+        }
+    }
+    if !saw_upper {
+        return None;
+    }
+    // Нормалізація: інвертувати регістр кожної літери (велика↔мала; не-літери
+    // лишаються собою — `to_uppercase`/`to_lowercase` для них тотожні).
+    let mut normalized = String::with_capacity(word.len());
+    for c in &chars {
+        if c.is_uppercase() {
+            normalized.extend(c.to_lowercase());
+        } else {
+            normalized.extend(c.to_uppercase());
+        }
+    }
+    // Precision-замок: лише якщо інвертований варіант — реальне слово.
+    if normalized != *word && current.dict.contains(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+/// Накласти корекцію регістру на рішення, що НЕ перемикає розкладку. Дві окремі,
+/// взаємовиключні евристики (кожна за своїм прапорцем):
+/// - [`overheld_shift_fix`] — перетриманий Shift (провідні великі: `ПРивіт`),
+///   гейт [`DetectorConfig::case_fix_enabled`];
+/// - [`capslock_fix`] — випадковий CapsLock (інвертований регістр: `пРИВІТ`),
+///   гейт [`DetectorConfig::capslock_fix_enabled`].
+///
+/// Якщо детектор уже вирішив перемкнути мову — це основний кейс, його лишаємо
+/// (комбінований layout+caps — свідомий follow-up). Інакше: слово вже в правильній
+/// мові, і якщо його регістр має патерн однієї з евристик, перетворюємо рішення на
+/// чисту caps-корекцію (`caps_only`).
 fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
     if d.switch {
         return d; // розкладко-перемикання — основний кейс, caps не нашаровуємо
@@ -571,7 +651,18 @@ fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
     let Some(current) = ctx.current_profile() else {
         return d;
     };
-    if let Some(fixed) = overheld_shift_fix(&d.current_text, current) {
+    let cfg = &ctx.config;
+    // Патерни взаємовиключні (провідні великі ⊥ перша мала), тож порядок безпечний.
+    let fixed = cfg
+        .case_fix_enabled
+        .then(|| overheld_shift_fix(&d.current_text, current))
+        .flatten()
+        .or_else(|| {
+            cfg.capslock_fix_enabled
+                .then(|| capslock_fix(&d.current_text, current))
+                .flatten()
+        });
+    if let Some(fixed) = fixed {
         // Veto захищає precision і тут (слово, яке користувач уже відкидав).
         if ctx.rules.vetoes(&d.current_text, &fixed) {
             return d;
@@ -1383,6 +1474,158 @@ mod tests {
         assert_eq!(d.best_text, "ПРивіт", "регістр зберігається (follow-up)");
     }
 
+    // --- НОВЕ: виправлення випадкового CapsLock (інвертований регістр) --------
+
+    #[test]
+    fn capslock_fix_uk_inverted_case() {
+        // `пРИВІТ`→`Привіт`: перша мала, решта великі (слід CapsLock), реальне слово.
+        let langs = [en_profile(), uk_profile()];
+        let ctx = ctx_with(&langs, "uk");
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, false),
+                (0x23, true),
+                (0x30, true),
+                (0x20, true),
+                (0x1F, true),
+                (0x31, true),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "пРИВІТ");
+        assert!(d.switch && d.caps_only, "має бути чиста caps-корекція");
+        assert_eq!(d.best, LayoutId::new("uk"), "та сама розкладка");
+        assert_eq!(d.best_text, "Привіт");
+    }
+
+    #[test]
+    fn capslock_fix_en_hello() {
+        // `hELLO`→`Hello`: інвертований CapsLock працює і для латиниці.
+        let langs = [caps_en_profile()];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(
+            &strokes_shift(&[
+                (0x23, false),
+                (0x12, true),
+                (0x26, true),
+                (0x26, true),
+                (0x18, true),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "hELLO");
+        assert!(d.switch && d.caps_only);
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "Hello");
+    }
+
+    #[test]
+    fn capslock_fix_rejects_all_caps_abbrev() {
+        // ALL-CAPS акроніми: перша літера ВЕЛИКА → не патерн (USD/EUR/API/ALL-CAPS).
+        let en = caps_en_profile();
+        let uk = uk_profile();
+        assert_eq!(capslock_fix("USD", &en), None);
+        assert_eq!(capslock_fix("EUR", &en), None);
+        assert_eq!(capslock_fix("API", &en), None);
+        assert_eq!(capslock_fix("ПРИВІТ", &uk), None, "укр. ALL-CAPS не чіпати");
+    }
+
+    #[test]
+    fn capslock_fix_rejects_mixed_case_and_non_words() {
+        let en = caps_en_profile();
+        // Легітимний mixed-case: хвіст має малі літери → не слід CapsLock.
+        assert_eq!(capslock_fix("iPhone", &en), None);
+        // `iOS` — патерн збігається (перша мала, решта великі), але норм. «Ios» НЕ
+        // у словнику → precision-замок відкидає.
+        assert_eq!(capslock_fix("iOS", &en), None);
+        // Інвертований варіант не у словнику → не чіпати.
+        assert_eq!(capslock_fix("пРИВ", &uk_profile()), None);
+        // Одно-літерне / порожнє.
+        assert_eq!(capslock_fix("a", &en), None);
+        assert_eq!(capslock_fix("", &en), None);
+    }
+
+    #[test]
+    fn capslock_disabled_flag_no_correction() {
+        // Прапорець capslock off → інвертований регістр НЕ виправляється.
+        let langs = [en_profile(), uk_profile()];
+        let cfg = DetectorConfig {
+            capslock_fix_enabled: false,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config(&langs, "uk", cfg);
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, false),
+                (0x23, true),
+                (0x30, true),
+                (0x20, true),
+                (0x1F, true),
+                (0x31, true),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "пРИВІТ");
+        assert!(
+            !d.switch,
+            "capslock off → не виправляти (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn case_fix_disabled_flag_no_overheld_correction() {
+        // Прапорець case_fix off → перетриманий Shift (`ПРивіт`) НЕ виправляється.
+        let langs = [en_profile(), uk_profile()];
+        let cfg = DetectorConfig {
+            case_fix_enabled: false,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config(&langs, "uk", cfg);
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, true),
+                (0x23, true),
+                (0x30, false),
+                (0x20, false),
+                (0x1F, false),
+                (0x31, false),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "ПРивіт");
+        assert!(!d.switch, "case_fix off → регістр не виправляти");
+    }
+
+    #[test]
+    fn case_fix_and_capslock_flags_are_independent() {
+        // Гейти РОЗДІЛЬНІ: case_fix off, але capslock on → CapsLock усе одно діє.
+        let langs = [en_profile(), uk_profile()];
+        let cfg = DetectorConfig {
+            case_fix_enabled: false,
+            capslock_fix_enabled: true,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config(&langs, "uk", cfg);
+        let d = decide(
+            &strokes_shift(&[
+                (0x22, false),
+                (0x23, true),
+                (0x30, true),
+                (0x20, true),
+                (0x1F, true),
+                (0x31, true),
+            ]),
+            &ctx,
+        );
+        assert_eq!(d.current_text, "пРИВІТ");
+        assert!(
+            d.switch && d.caps_only,
+            "capslock-гейт незалежний від case_fix"
+        );
+        assert_eq!(d.best_text, "Привіт");
+    }
+
     // --- Частотно-зважений dict-бонус (`score`, `FrequencyMap`) ---------------
     // Цільовий баг: `ну`↔`ye` — ОБИДВА реальні слова у словниках (dict-бонуси
     // скасовуються, LM ~рівні) → бінарний шар не перемикав. Частота розрізняє.
@@ -1715,6 +1958,32 @@ mod tests {
             "не-пара не повинна форситись як валютна"
         );
         assert_eq!(d_half.best, d_none.best, "forex-гілка не мала змінити best");
+    }
+
+    #[test]
+    fn forex_disabled_flag_no_switch() {
+        // Прапорець forex off → валютна пара НЕ форситься (сигнал вимкнено B4).
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let rules = forex_rules(&["EUR", "USD"]);
+        let cfg = DetectorConfig {
+            forex_enabled: false,
+            ..DetectorConfig::default()
+        };
+        let ctx = Context {
+            active_window: Default::default(),
+            current_layout: LayoutId::new("uk"),
+            languages: &langs,
+            config: cfg,
+            exclusions: &NO_EXCL,
+            rules: &rules,
+        };
+        let d = decide(&strokes(&EURUSD), &ctx);
+        assert_eq!(d.current_text, "угкгів");
+        assert!(
+            !d.switch,
+            "forex off → валютну пару не чіпати (conf={})",
+            d.confidence
+        );
     }
 
     // --- Фонотактика («ь» на початку неможливе) + розширення файлів ------------

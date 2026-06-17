@@ -15,11 +15,18 @@
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
     return {
-      version: 2,
+      version: 3,
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
       words: { always_switch: [], never_switch: [] },
+      behavior: {
+        fix_case: true,
+        forex: true,
+        recognize_extensions: true,
+        phonotactics: true,
+        fix_capslock: true,
+      },
       hotkeys: {
         pause_resume: { accelerator: "Ctrl+Alt+P", enabled: false },
         revert_last: { accelerator: "Ctrl+Alt+Z", enabled: false },
@@ -31,6 +38,15 @@
       detection: { min_word_len: 3, confidence_threshold: 0.75 },
     };
   }
+
+  /** Перемикачі поведінки (B4): ключ у `settings.behavior` + i18n-підписи. */
+  const BEHAVIOR_TOGGLES = [
+    { key: "fix_case", hint: "behavior.fix_case.hint" },
+    { key: "forex", hint: "behavior.forex.hint" },
+    { key: "recognize_extensions", hint: "behavior.recognize_extensions.hint" },
+    { key: "phonotactics", hint: "behavior.phonotactics.hint" },
+    { key: "fix_capslock", hint: "behavior.fix_capslock.hint" },
+  ];
 
   /** Порядок дій у картці хоткеїв (дзеркало `HotkeyAction::ALL` у бекенді). */
   const HOTKEY_ACTIONS = [
@@ -82,6 +98,28 @@
   let statusDetail = $state("");
 
   const dirty = $derived(JSON.stringify(settings) !== baseline);
+
+  // Людська «чутливість» поверх технічного `confidence_threshold`.
+  // Обережно = ВИЩИЙ поріг (менше спрацювань), Агресивно = НИЖЧИЙ поріг.
+  // Слайдер 0 (обережно) → 100 (агресивно) мапиться лінійно у [1.0 .. 0.5].
+  const THR_CAUTIOUS = 1.0; // sensitivity 0
+  const THR_AGGRESSIVE = 0.5; // sensitivity 100
+  const sensitivity = $derived(
+    Math.round(
+      ((THR_CAUTIOUS -
+        Math.max(
+          THR_AGGRESSIVE,
+          Math.min(THR_CAUTIOUS, settings.detection.confidence_threshold),
+        )) /
+        (THR_CAUTIOUS - THR_AGGRESSIVE)) *
+        100,
+    ),
+  );
+  function setSensitivity(/** @type {number|string} */ v) {
+    const s = Math.max(0, Math.min(100, Number(v)));
+    settings.detection.confidence_threshold =
+      THR_CAUTIOUS - (s / 100) * (THR_CAUTIOUS - THR_AGGRESSIVE);
+  }
 
   function applyLoaded(/** @type {any} */ loaded) {
     settings = loaded;
@@ -293,6 +331,38 @@
     </div>
   </section>
 
+  <!-- Поведінка (B4): тоггли евристик + людський повзунок чутливості -->
+  <section class="card">
+    <h2>{$t("section.behavior.title")}</h2>
+    <p class="desc">{$t("section.behavior.desc")}</p>
+
+    <div class="behavior-list">
+      {#each BEHAVIOR_TOGGLES as b (b.key)}
+        <div class="behavior-row">
+          <Toggle bind:checked={settings.behavior[b.key]} label={$t(`behavior.${b.key}`)} />
+          <span class="hint">{$t(b.hint)}</span>
+        </div>
+      {/each}
+    </div>
+
+    <div class="sensitivity">
+      <span class="sens-title">{$t("behavior.sensitivity.title")}</span>
+      <div class="sens-row">
+        <span class="sens-end">{$t("behavior.sensitivity.cautious")}</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          value={sensitivity}
+          oninput={(e) => setSensitivity(e.currentTarget.value)}
+        />
+        <span class="sens-end">{$t("behavior.sensitivity.aggressive")}</span>
+      </div>
+      <p class="desc">{$t("behavior.sensitivity.hint")}</p>
+    </div>
+  </section>
+
   <!-- Гарячі клавіші -->
   <section class="card">
     <h2>{$t("section.hotkeys.title")}</h2>
@@ -475,6 +545,52 @@
 
   .word-group + .word-group {
     margin-top: 1rem;
+  }
+
+  .behavior-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+
+  .behavior-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .behavior-row .hint {
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .sensitivity {
+    margin-top: 1.1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .sens-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .sens-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0.6rem 0 0.2rem;
+  }
+
+  .sens-row input[type="range"] {
+    flex: 1;
+  }
+
+  .sens-end {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+    white-space: nowrap;
   }
 
   .hotkey-list {

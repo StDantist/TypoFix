@@ -424,3 +424,39 @@ CaseMode) -> String` (`case.rs`, `CaseMode{Upper,Lower,Sentence}`).
 - Стереже: `tests/hotkeys_b1.rs` (E2E через virtual: відкат відновлює РІВНО
   оригінал+завчає, force ігнорує поріг на короткому слові, no-op кейси) + юніти
   `case::tests::*`.
+
+## Прапорці поведінки B4 + виправлення випадкового CapsLock (готча!)
+
+**Неочевидне.** У `DetectorConfig` три bool-прапорці, ВСІ default `true` (= поточна
+поведінка → eval не змінюється). Назви узгоджені з `src-tauri` (Taras мапить):
+- **`case_fix_enabled`** — гейтить наявний `overheld_shift_fix` (перетриманий Shift,
+  провідні великі: `ПРивіт→Привіт`);
+- **`forex_enabled`** — гейтить forex-гілку (валютні пари ISO 4217) в `eval_branch`;
+- **`capslock_fix_enabled`** — гейтить НОВЕ правило `capslock_fix`.
+
+- **Гейти РОЗДІЛЬНІ й незалежні:** `case_fix_enabled` і `capslock_fix_enabled` —
+  ДВА окремі прапорці на ДВІ окремі евристики в `apply_caps_fix` (патерни
+  взаємовиключні). `case_fix=false` НЕ вимикає CapsLock і навпаки. Forex гейт — у
+  `eval_branch` (обгортка `cfg.forex_enabled.then(|| …).flatten()`), не плутати з
+  `extensions_enabled`/`phonotactics_enabled` (ті лишились як були).
+- **`capslock_fix` — інвертований регістр (слід випадкового CapsLock):** патерн —
+  **перша літера МАЛА, усі решта алфавітних ВЕЛИКІ** (`пРИВІТ`/`hELLO`); нормалізація
+  = **інвертувати регістр КОЖНОЇ літери** → `Привіт`/`Hello`. Це окремо від
+  `overheld_shift_fix` (той — лише провідні великі). Обидва дають `caps_only`
+  Decision (та сама розкладка, лише `DeleteChars`+`TypeUnicode`).
+- **PRECISION-ГЕЙТ (двошаровий):** (1) патерн відсікає ALL-CAPS акроніми (`USD`/`EUR`/
+  `API` — перша літера ВЕЛИКА → не патерн) і легітимний mixed-case (`iPhone`/`iOS` —
+  будь-яка мала в хвості → не слід CapsLock); (2) **словниковий замок** — інвертований
+  варіант мусить бути РЕАЛЬНИМ словом (`current.dict.contains`, регістронезалежний).
+  `iOS`→`Ios` не в словнику → не чіпаємо. Як і `overheld_shift_fix` — dict-only, без
+  LM (LM-гейт ризикував би precision). Veto також блокує (як для overheld).
+- ⚠️ **Eval СЛІПИЙ до caps** (метрика `switch && best==intended_layout`, а caps лишає
+  `best==current_layout`): CapsLock-правило не дає TP/FP/FN. **Eval незмінний:
+  precision 100%, recall 98.9%, F1 99.4%, FP=0** (з прапорцями й без). Покриття —
+  герметичні юніти: `capslock_fix_*` (позитиви `пРИВІТ`/`hELLO`, негативи
+  `USD`/`EUR`/`API`/`iPhone`/`iOS`/non-word/одно-літерне) + `*_disabled_flag_*` /
+  `case_fix_and_capslock_flags_are_independent` / `forex_disabled_flag_no_switch`.
+- **Сумісність збірки:** `DetectorConfig` має `impl Default`; усі ВНУТРІШНІ
+  конструювання (core/тести) використовують `..DetectorConfig::default()`, тож нові
+  поля підхоплюються. `src-tauri/runtime.rs::detector_config_from` — зона Taras
+  (явне конструювання без spread) → він допише мапінг трьох полів своєю чергою.

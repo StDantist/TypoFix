@@ -83,8 +83,29 @@ const messages = {
     "hotkeys.note":
       "Дії з виділенням (регістр, ручне перемикання) працюють лише коли TypoFix активний (не на паузі).",
 
+    // Поведінка (B4)
+    "section.behavior.title": "Поведінка",
+    "section.behavior.desc":
+      "Які типи виправлень TypoFix робить. Вимикайте те, що заважає — решта працюватиме як є.",
+    "behavior.fix_case": "Виправляти регістр",
+    "behavior.fix_case.hint": "ПРивіт → Привіт (перетриманий Shift)",
+    "behavior.forex": "Forex-режим",
+    "behavior.forex.hint": "валютні пари та коди валют (EURUSD, USD)",
+    "behavior.recognize_extensions": "Розпізнавати файлові розширення",
+    "behavior.recognize_extensions.hint": ".txt, .md та інші — не плутати з укр. словами",
+    "behavior.phonotactics": "Фонотактика української",
+    "behavior.phonotactics.hint": "неможливі для української сполуки (напр. ь на початку)",
+    "behavior.fix_capslock": "Виправляти випадковий CapsLock",
+    "behavior.fix_capslock.hint": "пРИВІТ → Привіт (ненавмисний CapsLock)",
+    // Чутливість (людський слайдер поверх порога впевненості)
+    "behavior.sensitivity.title": "Чутливість",
+    "behavior.sensitivity.cautious": "Обережно",
+    "behavior.sensitivity.aggressive": "Агресивно",
+    "behavior.sensitivity.hint":
+      "Обережно = менше хибних спрацювань; Агресивно = більше виправлень (вищий ризик зайвого).",
+
     // Advanced
-    "section.detection.title": "Поріг впевненості (advanced)",
+    "section.detection.title": "Поріг впевненості (розширені)",
     "section.detection.desc":
       "Наскільки впевнено має бути визначено помилку, щоб перенабрати текст. Вища влучність = менше хибних спрацювань.",
     "detection.minWordLen": "Мінімальна довжина слова",

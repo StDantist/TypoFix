@@ -56,19 +56,30 @@ pub fn exclusion_rules_from(settings: &AppSettings) -> ExclusionRules {
     rules
 }
 
-/// Зібрати [`DetectorConfig`] із advanced-порогів конфігу.
+/// Зібрати [`DetectorConfig`] із порогів і перемикачів поведінки конфігу.
 ///
 /// `min_word_len` → `min_switch_len` (прямий, змістовний маппінг).
 /// `confidence_threshold` (0..1) масштабує `base_threshold` монотонно навколо
 /// дефолту (0.75 = без зміни). Це **тимчасова** евристика: внутрішній поріг
 /// детектора — це лог-ймовірнісний запас, а не 0..1-впевненість; справжня
 /// калібровка — у фазі eval. Вищий конфіг → консервативніше (precision > recall).
+///
+/// **Перемикачі поведінки (B4)** — `BehaviorDto` → `*_enabled`-прапорці 1:1:
+/// `fix_case`→`case_fix_enabled`, `forex`→`forex_enabled`,
+/// `recognize_extensions`→`extensions_enabled`, `phonotactics`→`phonotactics_enabled`,
+/// `fix_capslock`→`capslock_fix_enabled`. Решта полів — з `DetectorConfig::default`.
 pub fn detector_config_from(settings: &AppSettings) -> DetectorConfig {
     let base = DetectorConfig::default();
     let conf = settings.detection.confidence_threshold.clamp(0.0, 1.0);
+    let b = &settings.behavior;
     DetectorConfig {
         min_switch_len: usize::from(settings.detection.min_word_len.max(1)),
         base_threshold: base.base_threshold * (conf / 0.75),
+        case_fix_enabled: b.fix_case,
+        forex_enabled: b.forex,
+        extensions_enabled: b.recognize_extensions,
+        phonotactics_enabled: b.phonotactics,
+        capslock_fix_enabled: b.fix_capslock,
         ..base
     }
 }
@@ -505,7 +516,7 @@ fn engine_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DetectionDto, ExclusionsDto, WordsDto};
+    use crate::config::{BehaviorDto, DetectionDto, ExclusionsDto, WordsDto};
     use typofix_core::WindowInfo;
 
     fn settings_with(exclusions: ExclusionsDto, detection: DetectionDto) -> AppSettings {
@@ -514,6 +525,37 @@ mod tests {
             detection,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn behavior_flags_map_to_detector_config() {
+        // Усе вимкнено → відповідні прапорці DetectorConfig false.
+        let settings = AppSettings {
+            behavior: BehaviorDto {
+                fix_case: false,
+                forex: false,
+                recognize_extensions: false,
+                phonotactics: false,
+                fix_capslock: false,
+            },
+            ..Default::default()
+        };
+        let cfg = detector_config_from(&settings);
+        assert!(!cfg.case_fix_enabled);
+        assert!(!cfg.forex_enabled);
+        assert!(!cfg.extensions_enabled);
+        assert!(!cfg.phonotactics_enabled);
+        assert!(!cfg.capslock_fix_enabled);
+
+        // Дефолти (усе true) → всі прапорці увімкнені (поточна поведінка).
+        let on = detector_config_from(&AppSettings::default());
+        assert!(
+            on.case_fix_enabled
+                && on.forex_enabled
+                && on.extensions_enabled
+                && on.phonotactics_enabled
+                && on.capslock_fix_enabled
+        );
     }
 
     #[test]

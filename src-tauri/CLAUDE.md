@@ -62,9 +62,22 @@ npm --prefix ui install
 - **Файл:** `settings.json` у Tauri **app config dir** (`app.path().app_config_dir()`).
   На Windows це `%APPDATA%\dev.typofix.app\settings.json` (identifier із conf).
 - **Формат:** pretty-JSON DTO `AppSettings` (version, enabled, language, exclusions
-  {process_names/exe_paths/folders}, **words {always_switch/never_switch}**, detection).
-  Усі поля `#[serde(default)]` → старі/часткові файли читаються без падіння
-  (forward/back-compat: старий settings.json без `words` → порожні списки).
+  {process_names/exe_paths/folders}, **words {always_switch/never_switch}**, hotkeys,
+  **behavior**, detection). Усі поля `#[serde(default)]` → старі/часткові файли
+  читаються без падіння (forward/back-compat: старий settings.json без секції → дефолти).
+  `SCHEMA_VERSION` росте з кожною новою секцією: v2 додав `hotkeys`, v3 — `behavior`.
+- **Секція `behavior` (B4, перемикачі поведінки):** 5 bool-тогглів, **усі default `true`**
+  (= поточна повна поведінка детектора, тож відсутня секція нічого не змінює).
+  Дзеркалять `*_enabled`-прапорці `DetectorConfig` 1:1 — мапінг у `detector_config_from`
+  (`runtime.rs`): `fix_case`→`case_fix_enabled`, `forex`→`forex_enabled`,
+  `recognize_extensions`→`extensions_enabled`, `phonotactics`→`phonotactics_enabled`,
+  `fix_capslock`→`capslock_fix_enabled`. UI — картка «Поведінка» (`Toggle` на кожен).
+  **Чутливість (людський повзунок):** окремого поля НЕ має — це перепрочитання
+  наявного `detection.confidence_threshold`. UI-слайдер 0 (Обережно) → 100 (Агресивно)
+  мапиться лінійно у поріг `[1.0 .. 0.5]` (`THR_CAUTIOUS`/`THR_AGGRESSIVE` у `App.svelte`):
+  **вищий поріг = обережніше** (менше спрацювань). Числовий `confidence_threshold` +
+  `min_word_len` лишились у картці «Поріг впевненості (розширені)» — слайдер і числове
+  поле правлять те саме поле (двостороннє через `$derived sensitivity`).
 - **Секція `words` (винятки по СЛОВАХ, як Punto):** `always_switch` = позитивний
   особистий словник (слова, які апка ВИЗНАЄ й перемикає — жаргон/нікнейми/forex,
   напр. `лох`); `never_switch` = per-word veto (слова, які лишати недоторканими).
@@ -211,6 +224,10 @@ npm --prefix ui install
 - `detector_config_from`: `min_word_len`→`min_switch_len` (прямий). `confidence_threshold`
   (0..1) масштабує `base_threshold` монотонно навколо 0.75=дефолт — **тимчасова**
   евристика (внутрішній поріг — лог-ймовірнісний, не 0..1); справжня калібровка у фазі eval.
+  **B4-тоггли** (`settings.behavior`) прокидаються в `*_enabled`-прапорці тут же
+  (`fix_case`/`forex`/`recognize_extensions`/`phonotactics`/`fix_capslock` →
+  `case_fix_enabled`/`forex_enabled`/`extensions_enabled`/`phonotactics_enabled`/
+  `capslock_fix_enabled`); решта полів — з `DetectorConfig::default`.
 - `load_word_rules(pair, data_dir, words)`: будує `core::WordRules`, **об'єднуючи**
   файлові джерела з `data/` зі словами-винятками з налаштувань (`&AppSettings.words`):
   - whitelist коротких СЛУЖБОВИХ слів (`data/dicts/{lang}.short.txt` через

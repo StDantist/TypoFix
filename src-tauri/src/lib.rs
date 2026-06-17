@@ -754,6 +754,36 @@ fn save_settings(
     Ok(cleaned)
 }
 
+/// Скинути «параметри» до стандартних значень БЕЗ втрати внесених користувачем даних.
+/// Єдине джерело істини дефолтів — Rust (`AppSettings::default()`).
+///
+/// СКИДАЄМО до дефолтів: `behavior` (5 тогглів), `detection` (`min_word_len` +
+/// `confidence_threshold` ⇒ і повзунок чутливості), `feedback` (`sound_on_switch`),
+/// `hotkeys` (прив'язки → дефолтні, тобто всі вимкнені), `language` (→ `uk-en`).
+/// ЗБЕРІГАЄМО як є: `exclusions` (process/exe/теки), `words` (always/never switch),
+/// а також `enabled` (стан паузи/активності — це не «параметр», а вимикач).
+/// НЕ чіпаємо файл навчених слів (`learned_exceptions.txt`) та автозапуск (реєстр,
+/// поза `settings.json`).
+#[tauri::command]
+fn reset_settings(app: AppHandle, state: State<'_, AppState>) -> Result<AppSettings, String> {
+    let mut fresh = AppSettings::default();
+    {
+        let current = state.settings.lock().expect("AppState отруєно");
+        fresh.enabled = current.enabled;
+        fresh.exclusions = current.exclusions.clone();
+        fresh.words = current.words.clone();
+    }
+    let cleaned = fresh.sanitized();
+    config::save_to_disk(&app, &cleaned)?;
+    *state.settings.lock().expect("AppState отруєно") = cleaned.clone();
+    refresh_tray(&app, cleaned.enabled);
+    sync_runtime(&app, &cleaned);
+    if !e2e_mode() {
+        hotkeys::apply(&app, &cleaned);
+    }
+    Ok(cleaned)
+}
+
 /// Точка входу застосунку. Викликається з `main.rs`.
 pub fn run() {
     tauri::Builder::default()
@@ -771,6 +801,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_settings,
             save_settings,
+            reset_settings,
             list_running_processes,
             get_autostart,
             set_autostart,

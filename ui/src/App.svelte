@@ -5,6 +5,7 @@
   import {
     loadSettings,
     saveSettings,
+    resetSettings,
     pickExe,
     pickFolder,
     getAutostart,
@@ -16,6 +17,10 @@
   import Toggle from "./lib/Toggle.svelte";
   import RuleList from "./lib/RuleList.svelte";
   import ProcessPicker from "./lib/ProcessPicker.svelte";
+
+  /** @typedef {import("./lib/api.js").AppSettings} AppSettings */
+  /** @typedef {import("./lib/api.js").Behavior} Behavior */
+  /** @typedef {import("./lib/api.js").Hotkeys} Hotkeys */
 
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
@@ -45,7 +50,10 @@
     };
   }
 
-  /** Перемикачі поведінки (B4): ключ у `settings.behavior` + i18n-підписи. */
+  /**
+   * Перемикачі поведінки (B4): ключ у `settings.behavior` + i18n-підписи.
+   * @type {{ key: keyof Behavior, hint: string }[]}
+   */
   const BEHAVIOR_TOGGLES = [
     { key: "fix_case", hint: "behavior.fix_case.hint" },
     { key: "forex", hint: "behavior.forex.hint" },
@@ -54,7 +62,10 @@
     { key: "fix_capslock", hint: "behavior.fix_capslock.hint" },
   ];
 
-  /** Порядок дій у картці хоткеїв (дзеркало `HotkeyAction::ALL` у бекенді). */
+  /**
+   * Порядок дій у картці хоткеїв (дзеркало `HotkeyAction::ALL` у бекенді).
+   * @type {(keyof Hotkeys)[]}
+   */
   const HOTKEY_ACTIONS = [
     "pause_resume",
     "revert_last",
@@ -79,7 +90,7 @@
   }
 
   /** Захопити комбінацію у поле акселератора (Backspace/Delete — очистити). */
-  function captureAccel(/** @type {KeyboardEvent} */ e, /** @type {string} */ action) {
+  function captureAccel(/** @type {KeyboardEvent} */ e, /** @type {keyof Hotkeys} */ action) {
     if (e.key === "Tab") return; // не ламаємо навігацію
     if (e.key === "Backspace" || e.key === "Delete") {
       settings.hotkeys[action].accelerator = "";
@@ -91,6 +102,7 @@
     e.preventDefault();
   }
 
+  /** @type {AppSettings} */
   let settings = $state(defaultSettings());
   /** Останній збережений знімок — база для визначення «брудних» змін. */
   let baseline = $state(JSON.stringify(defaultSettings()));
@@ -99,9 +111,11 @@
   let neverWordInput = $state("");
   /** Чи показано модалку-пікер запущених процесів. */
   let showProcessPicker = $state(false);
-  /** @type {"" | "saved" | "saveError" | "loadError"} */
+  /** @type {"" | "saved" | "reset" | "saveError" | "loadError"} */
   let statusKey = $state("");
   let statusDetail = $state("");
+  /** Чи показано підтвердження скидання параметрів до стандартних. */
+  let showResetConfirm = $state(false);
 
   // Автозапуск (B5). НЕ частина settings.json — джерело істини сам плагін (реєстр).
   // `applied` = останнє значення, надіслане в бекенд: guard, щоб $effect не
@@ -278,7 +292,26 @@
       statusDetail = String(err);
     }
   }
+
+  /** Скинути параметри до стандартних (бекенд зберігає exclusions/words/паузу). */
+  async function doReset() {
+    showResetConfirm = false;
+    try {
+      applyLoaded(await resetSettings());
+      statusKey = "reset";
+      statusDetail = "";
+    } catch (err) {
+      statusKey = "saveError";
+      statusDetail = String(err);
+    }
+  }
 </script>
+
+<svelte:window
+  on:keydown={(e) => {
+    if (showResetConfirm && e.key === "Escape") showResetConfirm = false;
+  }}
+/>
 
 <main>
   <header class="page-head">
@@ -404,6 +437,7 @@
           type="text"
           bind:value={neverWordInput}
           placeholder={$t("words.never.placeholder")}
+          data-testid="never-word-input"
         />
         <button type="submit" disabled={!neverWordInput.trim()}>
           {$t("words.add.never")}
@@ -584,6 +618,8 @@
     <div class="status" data-testid="save-status" data-status={statusKey}>
       {#if statusKey === "saved"}
         <span class="ok" data-testid="status-saved">✓ {$t("status.saved")}</span>
+      {:else if statusKey === "reset"}
+        <span class="ok" data-testid="status-reset">✓ {$t("status.reset")}</span>
       {:else if statusKey === "saveError"}
         <span class="err" title={statusDetail}>{$t("status.saveError")}: {statusDetail}</span>
       {:else if statusKey === "loadError"}
@@ -593,6 +629,13 @@
       {/if}
     </div>
     <div class="buttons">
+      <button
+        class="secondary"
+        onclick={() => (showResetConfirm = true)}
+        data-testid="reset-button"
+      >
+        {$t("action.reset")}
+      </button>
       <button class="secondary" onclick={reload} disabled={!dirty}>
         {$t("action.cancel")}
       </button>
@@ -611,6 +654,40 @@
     onpick={(name) => addUnique(settings.exclusions.process_names, name)}
     onclose={() => (showProcessPicker = false)}
   />
+{/if}
+
+{#if showResetConfirm}
+  <!-- Підкладка: клік поза вмістом закриває (логіка лише на backdrop, як у ProcessPicker) -->
+  <div
+    class="modal-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if (e.target === e.currentTarget) showResetConfirm = false;
+    }}
+  >
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label={$t("reset.confirm.title")}
+      data-testid="reset-modal"
+    >
+      <h2>{$t("reset.confirm.title")}</h2>
+      <p>{$t("reset.confirm.body")}</p>
+      <div class="modal-actions">
+        <button
+          class="secondary"
+          onclick={() => (showResetConfirm = false)}
+          data-testid="reset-cancel"
+        >
+          {$t("reset.confirm.cancel")}
+        </button>
+        <button class="primary" onclick={doReset} data-testid="reset-confirm">
+          {$t("reset.confirm.ok")}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
@@ -944,5 +1021,42 @@
     color: var(--text-dim);
     font-size: 0.78rem;
     text-align: center;
+  }
+
+  /* Модалка підтвердження скидання */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+
+  .modal {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    max-width: 420px;
+    margin: 1rem;
+  }
+
+  .modal h2 {
+    font-size: 1.05rem;
+    margin: 0 0 0.5rem;
+  }
+
+  .modal p {
+    margin: 0 0 1.1rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
   }
 </style>

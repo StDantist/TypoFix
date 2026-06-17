@@ -96,6 +96,25 @@ npm --prefix ui install
 - **Команди:** `load_settings` (диск → in-memory + повертає форму),
   `save_settings(settings)` (валідує `sanitized()`, пише, оновлює трей, повертає
   очищене). Диск — джерело істини; `AppState.settings` — синхронізована копія.
+- **`reset_settings() -> AppSettings`** (`lib.rs`): скидання «параметрів» до стандартних
+  БЕЗ втрати даних користувача. **Єдине джерело істини дефолтів — Rust**
+  (`AppSettings::default()`): будуємо свіжий default і ПЕРЕНОСИМО в нього з поточного
+  `AppState.settings` лише `exclusions`, `words` і `enabled`; далі `sanitized()` →
+  атомарний запис → оновлення стану/трею → `sync_runtime` (+`hotkeys::apply`, обидва
+  no-op у e2e). Повертає нові settings (UI робить `applyLoaded` → форма = повернене,
+  dirty скидається, статус «скинуто»).
+  - **СКИДАЄ до дефолтів:** `behavior` (5 тогглів), `detection` (`min_word_len` +
+    `confidence_threshold` ⇒ і людський повзунок чутливості), `feedback`
+    (`sound_on_switch`), `hotkeys` (прив'язки → дефолтні = всі вимкнені),
+    `language` (→ `uk-en`).
+  - **ЗБЕРІГАЄ як є:** `exclusions` (process/exe/теки), `words` (always/never switch),
+    `enabled` (стан паузи — це вимикач, не «параметр»). НЕ чіпає файл навчених слів
+    (`learned_exceptions.txt`) і автозапуск (реєстр, поза `settings.json`).
+  - **ГОТЧА:** reset переносить `exclusions`/`words` із ПЕРСИСТОВАНОГО стану
+    (`AppState.settings`), а не з форми. Незбережені правки списків/словника пропадуть
+    при скиданні — тож UI має модалку підтвердження. Власна app-команда → `core:default`,
+    новий permission НЕ потрібен. UI — кнопка «Скинути до стандартних» (`data-testid="reset-button"`)
+    + модалка (`reset-modal`/`reset-confirm`/`reset-cancel`), i18n `reset.*`/`action.reset`/`status.reset`.
 - **`list_running_processes() -> Vec<ProcessEntry>`** (`lib.rs`): перелік ЗАРАЗ
   запущених процесів для пікера виключень. `ProcessEntry { name, exe_path: Option,
   icon: Option, has_window: bool }`. **Дедуп за exe-іменем** (lowercase-ключ; один запис на застосунок,

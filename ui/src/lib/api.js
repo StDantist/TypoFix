@@ -67,6 +67,16 @@ export function saveSettings(settings) {
 }
 
 /**
+ * Скинути «параметри» до стандартних, ЗБЕРІГАЮЧИ дані користувача.
+ * Скидає behavior/detection/feedback/hotkeys/language; зберігає exclusions, words
+ * (і стан паузи). Пише на диск, повертає нові settings (джерело істини — бекенд).
+ * @returns {Promise<AppSettings>}
+ */
+export function resetSettings() {
+  return invoke("reset_settings");
+}
+
+/**
  * @typedef {Object} ProcessEntry
  * @property {string} name      exe-ім'я, напр. "chrome.exe"
  * @property {string|null} exe_path повний шлях, якщо доступний

@@ -141,4 +141,70 @@ describe("TypoFix — вікно налаштувань (UI-e2e)", () => {
       { timeout: 10000 },
     );
   });
+
+  it("«Скинути до стандартних»: параметри — дефолтні, дані користувача лишаються", async () => {
+    const TEST_WORD = "zzqqe2etest";
+    const save = await tid("save-button");
+    const status = await tid("save-status");
+
+    // 1) Додаємо слово-виняток (never_switch) і ЗБЕРІГАЄМО — щоб reset на бекенді
+    //    мав що зберегти (reset переносить words/exclusions із персистованого стану).
+    const neverInput = await tid("never-word-input");
+    await neverInput.setValue(TEST_WORD);
+    await browser.keys(["Enter"]);
+    const wordsCard = await tid("card-words");
+    await browser.waitUntil(
+      async () => (await wordsCard.getText()).includes(TEST_WORD),
+      { timeout: 5000, timeoutMsg: "слово не зʼявилось у списку" },
+    );
+    await browser.waitUntil(async () => await save.isEnabled(), { timeout: 5000 });
+    await clickCentered(save);
+    await browser.waitUntil(
+      async () => (await status.getAttribute("data-status")) === "saved",
+      { timeout: 10000 },
+    );
+
+    // 2) Псуємо «параметр»: вимикаємо тоггл поведінки fix_case (дефолт = увімкнено).
+    const fixCaseInput = await $('[data-testid="behavior-fix_case-input"]');
+    if (await fixCaseInput.isSelected()) {
+      await clickCentered(await tid("behavior-fix_case"));
+    }
+    expect(await fixCaseInput.isSelected()).toBe(false);
+
+    // 3) Скидання через модалку підтвердження.
+    await clickCentered(await tid("reset-button"));
+    const modal = await tid("reset-modal");
+    expect(await modal.isExisting()).toBe(true);
+    await clickCentered(await tid("reset-confirm"));
+
+    await browser.waitUntil(
+      async () => (await status.getAttribute("data-status")) === "reset",
+      { timeout: 10000, timeoutMsg: "скидання не завершилось статусом 'reset'" },
+    );
+
+    // 4) Параметр повернувся до дефолту (fix_case знову увімкнено)...
+    await browser.waitUntil(async () => await fixCaseInput.isSelected(), {
+      timeout: 5000,
+      timeoutMsg: "fix_case не повернувся до дефолту після скидання",
+    });
+    expect(await fixCaseInput.isSelected()).toBe(true);
+    // ...мовна пара — дефолтна...
+    expect(await (await tid("language-select")).getValue()).toBe("uk-en");
+    // ...а дані користувача (слово-виняток) ЛИШИЛИСЯ.
+    expect(await (await tid("card-words")).getText()).toContain(TEST_WORD);
+
+    // Прибираємо тестове слово й зберігаємо — лишаємо конфіг як був.
+    const rmBtn = await $(`//code[@title="${TEST_WORD}"]/following-sibling::button`);
+    await clickCentered(rmBtn);
+    await browser.waitUntil(
+      async () => !(await (await tid("card-words")).getText()).includes(TEST_WORD),
+      { timeout: 5000, timeoutMsg: "тестове слово не вдалось прибрати" },
+    );
+    await browser.waitUntil(async () => await save.isEnabled(), { timeout: 5000 });
+    await clickCentered(save);
+    await browser.waitUntil(
+      async () => (await status.getAttribute("data-status")) === "saved",
+      { timeout: 10000 },
+    );
+  });
 });

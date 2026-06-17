@@ -13,6 +13,8 @@
 - `selection.rs` — `get_selection_text()`: синтетичний Ctrl+C → читання буфера.
 - `hook.rs` — LL-хуки + message-pump потік.
 - `src/bin/live_spike.rs` — **РУЧНИЙ** харнес (див. нижче).
+- `src/bin/selection_smoke.rs` — **АВТОНОМНИЙ** live-харнес B1 (notepad-round-trip,
+  сам перевіряє себе; код виходу 0/1). Запуск/готчі — нижче.
 - Не-Windows ціль → тонка заглушка `stub` (щоб CI на Linux лишався зеленим).
 
 ## Готчі (порушиш — зламаєш тихо)
@@ -110,6 +112,24 @@
   `SwitchLayout(uk)+TypeUnicode("привіт")`; переключись у порожній Notepad.
 - Очікуваний доказ анти-циклу: під час кроку `type` власний ввід повертається
   вже `is_synthetic=true`.
+
+## Live smoke-тест B1 (`selection_smoke`, автономний)
+`cargo run -p typofix-platform-windows --bin selection_smoke` — сам запускає
+notepad, друкує `hello world`, Ctrl+A, `get_selection_text`, перевіряє відновлення
+clipboard, друк поверх виділення; вбиває notepad. ⚠️ Побічні ефекти (друкує у fg,
+перезаписує clipboard→відновлює sentinel, force-kill усіх notepad). Потребує
+**інтерактивної GUI-сесії**.
+- 🔴 **Foreground-стілінг заблоковано Windows:** свіжо-запущене вікно НЕ стає
+  активним саме по собі (інше вікно лишається fg). Обхід — `AttachThreadInput` до
+  потоку поточного fg-вікна + `SetForegroundWindow/BringWindowToTop` (див.
+  `force_foreground_notepad`). Без цього тест падав з `foreground="Deck.exe"`.
+- Win11-Notepad (packaged) стартує повільно й може жити в іншому PID, ніж spawned
+  child → шукаємо вікно за заголовком («notepad»/«блокнот»), не за PID.
+- **Підтверджено на живій Win11 (2× поспіль, exit 0):** (а) `get_selection_text` →
+  `Some("hello world")`; (б) clipboard відновлено (sentinel на місці) — privacy-
+  гарантія тримається; (в) `TypeUnicode` поверх активного виділення **затирає**
+  його (CF=`HELLO WORLD`, без дублювання) → **DeleteChars/Backspace перед друком НЕ
+  потрібен** для ApplyCase у стандартних edit-контролах.
 
 ## Приватність / follow-up
 - Натиски лише в RAM (канал mpsc), нічого на диск (правило №4).

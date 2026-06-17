@@ -467,6 +467,53 @@ pub fn load_user_words(path: &Path) -> std::io::Result<Vec<String>> {
     Ok(parse_user_words(&std::fs::read_to_string(path)?))
 }
 
+// --- Файлові розширення (switch: безглузде укр. читання → латиниця) ---------
+//
+// `data/dicts/extensions.txt` — добре відомі розширення БЕЗ крапки (один на
+// рядок, lowercase, `#` — коментар). Сценарій: англ. розширення, набране в укр.
+// розкладці, виходить безглуздям (`txt`→`еche`) → перемкнути на латиницю.
+// Loader дає лише МНОЖИНУ; гейт «не чіпати, якщо укр. читання — реальне слово»
+// (для ризикових `doc`/`log`/`go`…) робить core (Den).
+//
+// ІНТЕРФЕЙС ДЛЯ CORE: `load_extensions(&Path) -> HashSet<String>` (lowercase),
+// `is_known_extension(&set, token) -> bool` (lowercase membership). Список
+// найризиковіших (короткі / схожі на слова) — `data/CLAUDE.md`.
+
+/// Вбудований перелік розширень (committed, малий — кілька КБ).
+const EXTENSIONS_TXT: &str = include_str!("../../../data/dicts/extensions.txt");
+
+/// Розпарсити перелік розширень у множину. Один рядок = один токен, `#` —
+/// коментар, порожні рядки ігноруються; токени нормалізуються в lowercase.
+pub fn parse_extensions(src: &str) -> HashSet<String> {
+    src.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_lowercase())
+        .collect()
+}
+
+/// Множина розширень із вбудованого переліку (детерміновано, без IO).
+pub fn embedded_extensions() -> HashSet<String> {
+    parse_extensions(EXTENSIONS_TXT)
+}
+
+/// Завантажити перелік розширень із файлу на диску.
+/// Файлу немає → вбудований перелік (щоб core завжди мав робочу множину).
+pub fn load_extensions(path: &Path) -> std::io::Result<HashSet<String>> {
+    if !path.exists() {
+        return Ok(embedded_extensions());
+    }
+    Ok(parse_extensions(&std::fs::read_to_string(path)?))
+}
+
+/// Чи є `token` відомим файловим розширенням щодо множини `ext` (lowercase
+/// membership; провідну крапку, якщо є, ігноруємо). Суто перевірка членства;
+/// гейт «укр. читання — реальне слово» для ризикових токенів робить core.
+pub fn is_known_extension(ext: &HashSet<String>, token: &str) -> bool {
+    let t = token.trim_start_matches('.').to_lowercase();
+    !t.is_empty() && ext.contains(&t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,6 +686,46 @@ mod tests {
     fn load_user_words_missing_file_is_empty() {
         let words = load_user_words(Path::new("definitely/missing/user.txt")).unwrap();
         assert!(words.is_empty());
+    }
+
+    // --- Файлові розширення ------------------------------------------------
+
+    #[test]
+    fn extensions_parse_known_set() {
+        let ext = embedded_extensions();
+        for e in ["txt", "md", "pdf", "rs", "json", "png", "mp4", "docx"] {
+            assert!(ext.contains(e), "очікувано {e} у множині розширень");
+        }
+        // Усе lowercase, без крапок, без коментарів.
+        assert!(ext
+            .iter()
+            .all(|e| !e.starts_with('#') && !e.starts_with('.')));
+        assert!(ext.len() > 60, "надто мало розширень: {}", ext.len());
+    }
+
+    #[test]
+    fn extensions_normalize_and_ignore_comments() {
+        let set = parse_extensions("# хедер\n TXT \nMd\n\n# ще\n.pdf");
+        // Lowercase; `.pdf` лишається з крапкою (parse не чистить крапку — це
+        // робить is_known_extension), тож тут перевіряємо саме нормалізацію.
+        assert!(set.contains("txt") && set.contains("md"));
+    }
+
+    #[test]
+    fn known_extension_membership() {
+        let ext = embedded_extensions();
+        assert!(is_known_extension(&ext, "txt"));
+        assert!(is_known_extension(&ext, "TXT")); // регістронезалежно
+        assert!(is_known_extension(&ext, ".pdf")); // провідна крапка ок
+        assert!(!is_known_extension(&ext, "zzz")); // невідоме
+        assert!(!is_known_extension(&ext, "")); // порожнє
+        assert!(!is_known_extension(&ext, ".")); // лише крапка
+    }
+
+    #[test]
+    fn load_extensions_falls_back_to_embedded() {
+        let ext = load_extensions(Path::new("definitely/missing/ext.txt")).unwrap();
+        assert!(ext.contains("txt"));
     }
 
     #[test]

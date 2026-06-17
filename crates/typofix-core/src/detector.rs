@@ -149,6 +149,21 @@ pub struct DetectorConfig {
     /// вище). Це і є умова «двійник НЕ справжнє слово» (поряд із «не в словнику»).
     /// Дефолт `0.0`: біліберда має LM ≪ 0; справжні короткі слова — LM > 0.
     pub short_word_twin_lm_max: f64,
+    /// **Прапорець фонотактичного сигналу** (default `true`). В українській НЕМАЄ
+    /// слів, що починаються з «ь» — таке читання НЕМОЖЛИВЕ → перемкнути на латиницю
+    /// (за умови правдоподібного EN-двійника). Вимкнення → сигнал ігнорується
+    /// (для майбутнього UI-тоглу). Див. [`starts_impossible_uk`].
+    pub phonotactics_enabled: bool,
+    /// Запас правдоподібності EN-двійника для фонотактичного перемикання: латинський
+    /// кандидат форсить перемикання, лише якщо його LM перевищує LM (неможливого)
+    /// укр. читання щонайменше на цей запас. Дефолт `0.0`: неможливе укр. читання
+    /// фонотактично провальне, тож будь-який реальний латинський двійник його б'є;
+    /// гейт лише відсікає випадок «обидва боки — суцільне сміття».
+    pub phonotactic_twin_lm_margin: f64,
+    /// **Прапорець сигналу файлових розширень** (default `true`). EN-двійник
+    /// кандидата — відоме розширення (`txt`/`md`), а укр. читання НЕ реальне слово
+    /// → перемкнути на латиницю. Вимкнення → сигнал ігнорується (UI-тогл).
+    pub extensions_enabled: bool,
 }
 
 impl Default for DetectorConfig {
@@ -165,6 +180,9 @@ impl Default for DetectorConfig {
             short_word_lm_margin: 2.0,
             short_word_freq_margin: 2.0,
             short_word_twin_lm_max: 0.0,
+            phonotactics_enabled: true,
+            phonotactic_twin_lm_margin: 0.0,
+            extensions_enabled: true,
         }
     }
 }
@@ -216,6 +234,17 @@ pub struct Decision {
 /// слова в [`crate::engine`] і для дизамбігуації пунктуації-що-є-літерою тут.
 pub(crate) fn is_word_char(ch: char) -> bool {
     ch.is_alphabetic() || ch == '\'' || ch == '’'
+}
+
+/// Чи текст починається з символу, **НЕМОЖЛИВОГО на початку українського слова**.
+///
+/// Поки що єдине ЗАЛІЗНЕ (100%) правило — м'який знак «ь» (U+044C, велике U+042C):
+/// в українській НЕМАЄ слів, що починаються з нього. Тож кирилично-«ь»-початкове
+/// читання напевно НЕ українське — користувач мав на увазі латиницю. Інші можливі
+/// кандидати (напр. апостроф/«ї» на початку) свідомо НЕ додано — лише на 100%
+/// неможливі позиції, щоб не зачепити жодне реальне слово (precision > recall).
+fn starts_impossible_uk(text: &str) -> bool {
+    matches!(text.chars().next(), Some('ь') | Some('Ь'))
 }
 
 /// Чи дає цей страйк ЛІТЕРУ хоч у одній увімкненій розкладці (включно з поточною).
@@ -352,6 +381,78 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
         best_score = sc; // когерентна confidence у звіті (рішення дає forex_forced)
     }
 
+    // **Файлові розширення: EN-двійник кандидата — відоме розширення (`txt`/`md`) →
+    // сигнал «це латиниця».** Гейт precision: укр. читання НЕ реальне слово
+    // (`!current_is_dict`, включає особистий словник) — інакше ризикові розширення-
+    // слова (`doc`/`log`/`go`), чий укр.-двійник міг би бути валідним, ламали б
+    // легітимний ввід (гейт, НЕ список винятків). Фільтр `p.id != current_layout`
+    // лишає коректно набране в EN недоторканим. Форсить в обхід порогу/довжини.
+    let extension = (cfg.extensions_enabled && !forex_forced && !current_is_dict)
+        .then(|| {
+            ctx.languages
+                .iter()
+                .filter(|p| p.id != ctx.current_layout)
+                .find_map(|p| {
+                    let text = p.layout.interpret(strokes);
+                    if ctx.rules.is_known_extension(&text) {
+                        let sc = p.score(&text, cfg, false);
+                        Some((p.id.clone(), text, sc))
+                    } else {
+                        None
+                    }
+                })
+        })
+        .flatten();
+    let extension_forced = extension.is_some();
+    if let Some((lang, text, sc)) = extension {
+        best = lang;
+        best_text = text;
+        best_is_dict = false; // розширення — не словникове слово
+        best_score = sc;
+    }
+
+    // **Фонотактика: поточне укр. читання починається з «ь» — НЕМОЖЛИВЕ як
+    // українське (нема укр. слів на «ь»).** Сильний НЕГАТИВНИЙ сигнал на укр.
+    // читання → перемкнути на найправдоподібніший латинський двійник. Гейт
+    // precision: його LM має перевищувати LM (провального) укр. читання на запас —
+    // інакше обидва боки сміття (нічого не форсимо). Форсить в обхід порогу/довжини.
+    let phonotactic_forced = if cfg.phonotactics_enabled
+        && !forex_forced
+        && !extension_forced
+        && starts_impossible_uk(&current_text)
+    {
+        let alt = ctx
+            .languages
+            .iter()
+            .filter(|p| p.id != ctx.current_layout)
+            .map(|p| {
+                let text = p.layout.interpret(strokes);
+                let recognized = ctx.rules.recognizes(&text);
+                let sc = p.score(&text, cfg, recognized);
+                let is_dict = p.dict.contains(&text) || recognized;
+                (p.id.clone(), text, sc, is_dict)
+            })
+            .max_by(|a, b| {
+                a.2.lm
+                    .partial_cmp(&b.2.lm)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        match alt {
+            Some((lang, text, sc, is_dict))
+                if sc.lm > current_score.lm + cfg.phonotactic_twin_lm_margin =>
+            {
+                best = lang;
+                best_text = text;
+                best_is_dict = is_dict;
+                best_score = sc;
+                true
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
+
     let len = current_text.chars().count();
     let confidence = best_score.total - current_score.total;
     // LM-перевага кандидата БЕЗ бонусу словника: для дуже коротких слів вимагаємо,
@@ -395,7 +496,12 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let switch = current.is_some()
         && best != ctx.current_layout
         && !vetoed
-        && (forced || standard_ok || mirror_ok || forex_forced);
+        && (forced
+            || standard_ok
+            || mirror_ok
+            || forex_forced
+            || extension_forced
+            || phonotactic_forced);
 
     BranchEval {
         best,
@@ -1576,5 +1682,180 @@ mod tests {
             "не-пара не повинна форситись як валютна"
         );
         assert_eq!(d_half.best, d_none.best, "forex-гілка не мала змінити best");
+    }
+
+    // --- Фонотактика («ь» на початку неможливе) + розширення файлів ------------
+    // Фіз-позиції: m=0x32, d=0x20, t=0x14, x=0x2D. uk-двійники: ь, в, е, ч.
+    // «md»→«ьв» (старт із «ь»); «txt»→«ече» (відоме розширення).
+
+    fn signal_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x32, KeyCap::letter('m', 'M')),
+                (0x20, KeyCap::letter('d', 'D')),
+                (0x14, KeyCap::letter('t', 'T')),
+                (0x2D, KeyCap::letter('x', 'X')),
+            ],
+        );
+        // «md»/«txt» — НЕ слова (низька LM, особливо «txt» через рідкісне 'x').
+        let lm = NgramModel::train("text mode made data item", 3, 0.5);
+        let dict = Dictionary::from_words(["text", "mode", "data"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn signal_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x32, KeyCap::letter('ь', 'Ь')),
+                (0x20, KeyCap::letter('в', 'В')),
+                (0x14, KeyCap::letter('е', 'Е')),
+                (0x2D, KeyCap::letter('ч', 'Ч')),
+            ],
+        );
+        // «ь» НІКОЛИ не на початку (лише в середині/кінці) — як у реальній мові;
+        // «ече»/«ьв» — не слова.
+        let lm = NgramModel::train("вечір мить день наче ось вода", 3, 0.5);
+        let dict = Dictionary::from_words(["день", "вода", "наче"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    #[test]
+    fn phonotactic_soft_sign_start_switches_to_latin() {
+        // «ьв» (uk) неможливе (старт із «ь») → перемкнути на латиницю «md». Без
+        // правил розширень — спрацьовує ЧИСТА фонотактика.
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        let d = decide(&strokes(&[0x32, 0x20]), &ctx); // uk "ьв" / en "md"
+        assert_eq!(d.current_text, "ьв");
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "md");
+        assert!(
+            d.switch,
+            "укр. читання на «ь» неможливе → перемкнути (conf={:.2})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn phonotactic_disabled_flag_no_switch() {
+        // Той самий «ьв», але прапорець вимкнено → сигнал ігнорується. Без нього
+        // коротке «ьв»↔«md» не пробиває звичайний поріг → не перемикає.
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        let cfg = DetectorConfig {
+            phonotactics_enabled: false,
+            ..DetectorConfig::default()
+        };
+        let d = decide(&strokes(&[0x32, 0x20]), &ctx_with_config(&langs, "uk", cfg));
+        assert!(
+            !d.switch,
+            "прапорець phonotactics off → не перемикати (conf={:.2})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn phonotactic_real_uk_word_unaffected() {
+        // Реальне укр. слово «день» (не на «ь») → фонотактика не чіпає; найкраще
+        // лишається uk, перемикання нема.
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        // день: д=0x20,е=0x14,н=?,ь=0x32 — немає 'н' у профілі, тож беремо «ведь»?
+        // Простіше: слово «вень» (в,е,н...) теж без 'н'. Використаємо «вече» (в-е-ч-е)
+        // — не починається з «ь», тож фонотактика мовчить.
+        let d = decide(&strokes(&[0x20, 0x14, 0x2D, 0x14]), &ctx); // uk "вече" / en "dtxt"
+        assert_eq!(d.current_text, "вече");
+        assert!(
+            !d.switch || d.best == LayoutId::new("uk"),
+            "слово не на «ь» → фонотактика не форсить латиницю (best={} conf={:.2})",
+            d.best.as_str(),
+            d.confidence
+        );
+    }
+
+    fn ext_rules(exts: &[&str]) -> WordRules {
+        let mut r = WordRules::new();
+        for e in exts {
+            r.add_extension(e);
+        }
+        r
+    }
+
+    #[test]
+    fn extension_switches_from_cyrillic_layout() {
+        // «txt», набране в UK-розкладці → «ече» (не слово). Відоме розширення →
+        // перемкнути на латиницю.
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        let rules = ext_rules(&["txt", "md", "pdf"]);
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        let d = decide(&strokes(&[0x14, 0x2D, 0x14]), &ctx); // uk "ече" / en "txt"
+        assert_eq!(d.current_text, "ече");
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "txt");
+        assert!(
+            d.switch,
+            "відоме розширення 'txt' має перемкнути (conf={:.2})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn extension_gate_blocks_when_uk_reading_is_word() {
+        // Гейт precision: якщо укр. читання — реальне слово (тут робимо «ече»
+        // визнаним через особистий словник), розширення НЕ форсить — захист від
+        // ризикових розширень-слів (`doc`/`log`/`go`), чий укр.-двійник валідний.
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        let mut rules = ext_rules(&["txt"]);
+        rules.recognize_word("ече"); // тепер укр. читання — «слово»
+        let ctx = ctx_with_rules(&langs, "uk", &rules);
+        let d = decide(&strokes(&[0x14, 0x2D, 0x14]), &ctx); // uk "ече" / en "txt"
+        assert!(
+            !d.switch,
+            "укр. читання — слово → розширення не форсить (best={} conf={:.2})",
+            d.best.as_str(),
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn extension_disabled_flag_no_switch() {
+        let langs = [signal_en_profile(), signal_uk_profile()];
+        // Прапорець off — навіть із переліком розширень сигнал мовчить. Щоб
+        // ізолювати від фонотактики, беремо «ече» (не на «ь»).
+        let cfg = DetectorConfig {
+            extensions_enabled: false,
+            ..DetectorConfig::default()
+        };
+        // ctx_with_config бере NO_RULES; додамо розширення через окремий ctx.
+        let rules = ext_rules(&["txt"]);
+        let ctx = Context {
+            active_window: Default::default(),
+            current_layout: LayoutId::new("uk"),
+            languages: &langs,
+            config: cfg,
+            exclusions: &NO_EXCL,
+            rules: &rules,
+        };
+        let d = decide(&strokes(&[0x14, 0x2D, 0x14]), &ctx);
+        assert!(
+            !d.switch,
+            "прапорець extensions off → не перемикати (conf={:.2})",
+            d.confidence
+        );
     }
 }

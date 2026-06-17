@@ -160,6 +160,15 @@ pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>, words: &Word
                 rules.add_currency_code(c);
             }
         }
+
+        // Відомі файлові розширення — позитивний сигнал «це латиниця» (`txt`/`md`…);
+        // гейт «укр. читання — реальне слово» робить core. Нема файлу → вбудований
+        // перелік (loader Bruno).
+        if let Ok(exts) = typofix_data::load_extensions(&dict_dir.join("extensions.txt")) {
+            for e in &exts {
+                rules.add_extension(e);
+            }
+        }
     }
 
     // Особисті слова з налаштувань (UI) — ПОВЕРХ файлових джерел, не замість них:

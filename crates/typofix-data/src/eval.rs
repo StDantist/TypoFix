@@ -289,6 +289,11 @@ pub fn build_word_rules(langs: &[&str]) -> WordRules {
             rules.add_currency_code(c);
         }
     }
+    if let Ok(exts) = crate::load_extensions(&dict_dir.join("extensions.txt")) {
+        for e in &exts {
+            rules.add_extension(e);
+        }
+    }
     rules
 }
 

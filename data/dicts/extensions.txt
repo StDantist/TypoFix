@@ -1,0 +1,89 @@
+# Добре відомі файлові розширення (БЕЗ крапки), один на рядок, lowercase.
+# Призначення: дані для core (Den). Сценарій: англ. розширення, набране у
+# ввімкненій укр. розкладці, виходить безглуздям (`txt`→`еche`, `md`→`ьв`) —
+# таких слів нема → перемкнути на латиницю. Loader дає лише МНОЖИНУ; гейт
+# «не чіпати, якщо укр. читання — реальне слово» робить core (Den).
+# Формат: один токен на рядок, lowercase, `#` — коментар, порожні рядки — ні.
+# Loader: typofix_data::load_extensions(&Path) -> HashSet<String>.
+# Critère добору: ЛИШЕ добре відомі (precision важливіша за recall — не плодити
+# хибних збігів). Найризиковіші (схожі на слова) — позначено у data/CLAUDE.md.
+
+# --- документи / текст ---
+txt
+md
+pdf
+doc
+docx
+xls
+xlsx
+ppt
+pptx
+csv
+tsv
+# --- зображення ---
+png
+jpg
+jpeg
+gif
+svg
+webp
+bmp
+ico
+# --- аудіо / відео ---
+mp3
+mp4
+avi
+mkv
+mov
+wav
+flac
+# --- архіви / образи ---
+zip
+rar
+7z
+tar
+gz
+iso
+# --- бінарники / інсталятори ---
+exe
+dll
+msi
+bin
+# --- дані / конфіги ---
+json
+xml
+yaml
+yml
+toml
+ini
+cfg
+conf
+lock
+log
+# --- веб / стилі ---
+html
+htm
+css
+js
+ts
+jsx
+tsx
+# --- мови програмування ---
+rs
+go
+py
+rb
+php
+java
+c
+cpp
+h
+hpp
+cs
+sh
+bat
+ps1
+# --- бази даних ---
+sql
+db
+sqlite

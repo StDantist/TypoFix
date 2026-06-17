@@ -39,6 +39,13 @@ pub struct WordRules {
     ///
     /// [`is_currency_pair`]: WordRules::is_currency_pair
     currency_codes: Vec<String>,
+    /// **Відомі файлові розширення** (lowercase, БЕЗ крапки), для позитивного
+    /// сигналу «це латиниця» ([`is_known_extension`]). Дані з
+    /// `data/dicts/extensions.txt` (loader `typofix-data`). Порожній → сигнал
+    /// розширень вимкнено.
+    ///
+    /// [`is_known_extension`]: WordRules::is_known_extension
+    extensions: Vec<String>,
 }
 
 use crate::LayoutId;
@@ -52,6 +59,7 @@ impl WordRules {
             short_service: Vec::new(),
             recognized: Vec::new(),
             currency_codes: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 
@@ -151,6 +159,24 @@ impl WordRules {
         self.currency_codes.iter().any(|c| c == code)
     }
 
+    /// Додати відоме файлове розширення (нормалізується: lowercase, без провідної крапки).
+    pub fn add_extension(&mut self, ext: &str) -> &mut Self {
+        self.extensions
+            .push(ext.trim_start_matches('.').to_lowercase());
+        self
+    }
+
+    /// Чи `token` — **відоме файлове розширення** (lowercase membership; провідну
+    /// крапку, якщо є, ігноруємо). Дзеркалить `typofix_data::is_known_extension`,
+    /// але без HashSet (core лишається чистим; перелік малий — лінійна перевірка).
+    pub fn is_known_extension(&self, token: &str) -> bool {
+        if self.extensions.is_empty() {
+            return false;
+        }
+        let t = token.trim_start_matches('.').to_lowercase();
+        !t.is_empty() && self.extensions.iter().any(|e| e == &t)
+    }
+
     /// Чи набір порожній.
     pub fn is_empty(&self) -> bool {
         self.veto.is_empty()
@@ -158,6 +184,7 @@ impl WordRules {
             && self.short_service.is_empty()
             && self.recognized.is_empty()
             && self.currency_codes.is_empty()
+            && self.extensions.is_empty()
     }
 }
 
@@ -218,6 +245,21 @@ mod tests {
         assert!(!r.is_currency_pair("EURUSDX")); // 7
         assert!(!r.is_currency_pair("EUR123")); // цифри
         assert!(!r.is_currency_pair("ЕУРУСД")); // кирилиця (не ASCII)
+    }
+
+    #[test]
+    fn known_extension_membership_and_dot_stripping() {
+        let mut r = WordRules::new();
+        assert!(!r.is_known_extension("txt")); // порожній → false
+        r.add_extension("txt");
+        r.add_extension(".MD"); // провідна крапка ігнор., lowercase
+        assert!(r.is_known_extension("txt"));
+        assert!(r.is_known_extension("TXT")); // регістронезалежно
+        assert!(r.is_known_extension(".txt")); // крапку ігнор.
+        assert!(r.is_known_extension("md"));
+        assert!(!r.is_known_extension("exe")); // не в переліку
+        assert!(!r.is_known_extension("")); // порожній токен
+        assert!(!r.is_empty());
     }
 
     #[test]

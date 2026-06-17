@@ -40,6 +40,19 @@ const messages = {
     "exclusions.add.folder": "Додати теку…",
     "exclusions.remove": "Видалити",
 
+    // Слова-винятки (особистий словник)
+    "section.words.title": "Слова-винятки",
+    "section.words.desc":
+      "Особистий словник за словами. «Завжди перемикати» — слова, які TypoFix має визнавати й перемикати (жаргон, нікнейми, forex-пари). «Ніколи не перемикати» — слова, які лишати недоторканими.",
+    "words.kind.always": "перемикати",
+    "words.kind.never": "не чіпати",
+    "words.list.always": "Завжди перемикати",
+    "words.list.never": "Ніколи не перемикати",
+    "words.always.placeholder": "напр. лох, eurusd",
+    "words.never.placeholder": "напр. vec, npm",
+    "words.add.always": "Додати слово",
+    "words.add.never": "Додати слово",
+
     // Advanced
     "section.detection.title": "Поріг впевненості (advanced)",
     "section.detection.desc":

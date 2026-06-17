@@ -31,7 +31,7 @@ use typofix_core::{
     DetectorConfig, ExclusionRules, FrequencyMap, LanguageProfile, LayoutId, WordRules,
 };
 
-use crate::config::{AppSettings, LanguagePair};
+use crate::config::{AppSettings, LanguagePair, WordsDto};
 
 /// Ім'я файлу навчених винятків (поряд із `settings.json`).
 pub const LEARNED_FILE: &str = "learned_exceptions.txt";
@@ -120,43 +120,59 @@ pub fn load_language_profiles(
     Ok(profiles)
 }
 
-/// Завантажити курований whitelist коротких СЛУЖБОВИХ слів у [`WordRules`] для
-/// мовної пари. Whitelist лежить у `data/dicts/{lang}.short.txt`; `data_dir` —
-/// **корінь** `data/` (функція сама додає піддиректорію `dicts/`).
+/// Завантажити правила рівня слова в [`WordRules`] для мовної пари, **об'єднавши**
+/// джерела з файлів `data/` з особистими словами-винятками з налаштувань (`words`):
+/// - whitelist коротких СЛУЖБОВИХ слів — `data/dicts/{lang}.short.txt`;
+/// - **recognized** (позитив, перемикати) = `user.txt` ∪ `words.always_switch`;
+/// - **veto** (ніколи не перемикати) = `words.never_switch` (per-word veto з UI);
+/// - ISO 4217 коди валют — `data/dicts/iso4217.txt` (forex-сигнал).
 ///
-/// Це вмикає дзеркальну релаксацію порога коротких слів у детекторі (`от`/`ти`/
-/// `we`...). Немає каталогу даних / файлів whitelist → порожні правила (фіча
-/// просто вимкнена) — **м'яка деградація, не паніка** (читання помилки теж → пусто).
-/// Чисте path-based IO без хука → тестовно.
-pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>) -> WordRules {
+/// `data_dir` — **корінь** `data/` (функція сама додає піддиректорію `dicts/`).
+/// Whitelist вмикає дзеркальну релаксацію порога коротких слів у детекторі (`от`/
+/// `ти`/`we`...). Немає каталогу даних / файлів → файлові джерела порожні (фіча
+/// просто вимкнена) — **м'яка деградація, не паніка**; але слова з `words` усе одно
+/// застосовуються (вони не залежать від `data/`). Чисте path-based IO → тестовно.
+pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>, words: &WordsDto) -> WordRules {
     let mut rules = WordRules::new();
-    let Some(root) = data_dir else {
-        return rules; // fallback-режим (вбудовані зразки) — whitelist відсутній.
-    };
-    let dict_dir = root.join("dicts");
-    for lang in langs_for(pair) {
-        // Помилка читання трактуємо як «немає whitelist» — не валимо рушій.
-        let words = typofix_data::load_short_words(lang, &dict_dir).unwrap_or_default();
-        let id = LayoutId::new(lang);
-        for w in &words {
-            rules.allow_short_service(&id, w);
+
+    if let Some(root) = data_dir {
+        let dict_dir = root.join("dicts");
+        for lang in langs_for(pair) {
+            // Помилка читання трактуємо як «немає whitelist» — не валимо рушій.
+            let short = typofix_data::load_short_words(lang, &dict_dir).unwrap_or_default();
+            let id = LayoutId::new(lang);
+            for w in &short {
+                rules.allow_short_service(&id, w);
+            }
+        }
+
+        // Особистий словник (`user.txt`) — ПОЗИТИВНІ визнані слова (жаргон/нікнейми
+        // поза стандартним словником): дають dict-бонус → апка перемикає на них.
+        // М'яка деградація: нема файлу / помилка → порожньо.
+        for w in typofix_data::load_user_words(&dict_dir.join("user.txt")).unwrap_or_default() {
+            rules.recognize_word(&w);
+        }
+
+        // ISO 4217 коди валют — для розпізнавання валютних пар (forex-сигнал
+        // перемикання на латиницю). Нема файлу → вбудований перелік (loader Bruno).
+        if let Ok(codes) = typofix_data::load_iso4217(&dict_dir.join("iso4217.txt")) {
+            for c in &codes {
+                rules.add_currency_code(c);
+            }
         }
     }
 
-    // Особистий словник (`user.txt`) — ПОЗИТИВНІ визнані слова (жаргон/нікнейми
-    // поза стандартним словником): дають dict-бонус → апка перемикає на них.
-    // М'яка деградація: нема файлу / помилка → порожньо.
-    for w in typofix_data::load_user_words(&dict_dir.join("user.txt")).unwrap_or_default() {
-        rules.recognize_word(&w);
+    // Особисті слова з налаштувань (UI) — ПОВЕРХ файлових джерел, не замість них:
+    // `always_switch` додаються до recognized (як user.txt), `never_switch` —
+    // per-word veto. Регістр уже нормалізовано в `AppSettings::sanitized`, але
+    // `WordRules` усе одно матчить регістронезалежно.
+    for w in &words.always_switch {
+        rules.recognize_word(w);
+    }
+    for w in &words.never_switch {
+        rules.veto_word(w);
     }
 
-    // ISO 4217 коди валют — для розпізнавання валютних пар (forex-сигнал
-    // перемикання на латиницю). Нема файлу → вбудований перелік (loader Bruno).
-    if let Ok(codes) = typofix_data::load_iso4217(&dict_dir.join("iso4217.txt")) {
-        for c in &codes {
-            rules.add_currency_code(c);
-        }
-    }
     rules
 }
 
@@ -272,8 +288,9 @@ impl RuntimeManager {
         let exclusions = exclusion_rules_from(settings);
         let config = detector_config_from(settings);
         let languages = load_language_profiles(settings.language, data_dir.as_deref())?;
-        // Whitelist коротких службових слів (вмикає дзеркальну релаксацію порога).
-        let rules = load_word_rules(settings.language, data_dir.as_deref());
+        // Правила рівня слова: whitelist коротких службових слів + особистий
+        // словник (user.txt ∪ always_switch) + veto (never_switch) + forex-коди.
+        let rules = load_word_rules(settings.language, data_dir.as_deref(), &settings.words);
         let seed = load_learned(&learned_path);
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -349,7 +366,8 @@ fn engine_loop(
     for word in &seed {
         state.learned.learn(word);
     }
-    // `rules` містить whitelist коротких службових слів (veto/force ще не в конфігу).
+    // `rules` несе whitelist коротких службових слів, особистий словник
+    // (recognized) і per-word veto з налаштувань (force ще не в конфігу).
 
     while !stop.load(Ordering::SeqCst) {
         let Some(event) = platform.try_next_event() else {
@@ -384,7 +402,7 @@ fn engine_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DetectionDto, ExclusionsDto};
+    use crate::config::{DetectionDto, ExclusionsDto, WordsDto};
     use typofix_core::WindowInfo;
 
     fn settings_with(exclusions: ExclusionsDto, detection: DetectionDto) -> AppSettings {
@@ -496,10 +514,27 @@ mod tests {
     }
 
     #[test]
-    fn word_rules_empty_without_data_dir() {
-        // Fallback-режим (вбудовані зразки) → порожні правила, не паніка.
-        let rules = load_word_rules(LanguagePair::UkEn, None);
+    fn word_rules_empty_without_data_dir_or_settings_words() {
+        // Fallback-режим (вбудовані зразки) + порожні words → порожні правила.
+        let rules = load_word_rules(LanguagePair::UkEn, None, &WordsDto::default());
         assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn settings_words_map_to_recognized_and_veto_without_data_dir() {
+        // Слова з налаштувань застосовуються навіть без data/ (не залежать від файлів).
+        let words = WordsDto {
+            always_switch: vec!["лох".into(), "eurusd".into()],
+            never_switch: vec!["vec".into()],
+        };
+        let rules = load_word_rules(LanguagePair::UkEn, None, &words);
+        assert!(!rules.is_empty());
+        // always_switch → recognized (позитив, регістронезалежно).
+        assert!(rules.recognizes("Лох"));
+        assert!(rules.recognizes("EURUSD"));
+        // never_switch → veto (збіг із поточним АБО виправленим текстом).
+        assert!(rules.vetoes("vec", "будь-що"));
+        assert!(!rules.recognizes("vec"));
     }
 
     #[test]
@@ -512,7 +547,7 @@ mod tests {
         if !dir.join("dicts").join("uk.short.txt").is_file() {
             return;
         }
-        let rules = load_word_rules(LanguagePair::UkEn, Some(&dir));
+        let rules = load_word_rules(LanguagePair::UkEn, Some(&dir), &WordsDto::default());
         assert!(!rules.is_empty());
         // Куроване службове слово розпізнається per-мова; шум зі словника — ні.
         assert!(rules.is_short_service(&LayoutId::new("uk"), "от"));

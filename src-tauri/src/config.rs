@@ -46,6 +46,21 @@ pub struct ExclusionsDto {
     pub folders: Vec<String>,
 }
 
+/// Винятки рівня СЛОВА (як у Punto Switcher) — особистий словник.
+/// Дзеркало `core::WordRules` (позитив + veto). На відміну від `ExclusionsDto`
+/// тут нормалізуємо регістр (lowercase): матчинг у ядрі регістронезалежний,
+/// тож зберігання в нижньому регістрі прибирає дублі-варіанти регістру.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WordsDto {
+    /// «Завжди перемикати» — позитивний особистий словник: слова, які апка має
+    /// ВИЗНАВАТИ й перемикати на них (жаргон/нікнейми/forex поза стандартним
+    /// словником, напр. `лох`). Об'єднується з `data/dicts/user.txt`.
+    pub always_switch: Vec<String>,
+    /// «Ніколи не перемикати» — per-word veto: слова, які лишати недоторканими.
+    pub never_switch: Vec<String>,
+}
+
 /// Пороги детектора (advanced). Дзеркало майбутнього `DetectorConfig`.
 /// Значення за замовч. — консервативні (precision > recall).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -78,6 +93,8 @@ pub struct AppSettings {
     pub language: LanguagePair,
     /// Виключення застосунків/папок.
     pub exclusions: ExclusionsDto,
+    /// Винятки рівня слова (особистий словник: always/never switch).
+    pub words: WordsDto,
     /// Пороги детектора (advanced).
     pub detection: DetectionDto,
 }
@@ -89,6 +106,7 @@ impl Default for AppSettings {
             enabled: true,
             language: LanguagePair::UkEn,
             exclusions: ExclusionsDto::default(),
+            words: WordsDto::default(),
             detection: DetectionDto::default(),
         }
     }
@@ -102,6 +120,11 @@ impl AppSettings {
         self.exclusions.process_names = dedup_nonempty(self.exclusions.process_names);
         self.exclusions.exe_paths = dedup_nonempty(self.exclusions.exe_paths);
         self.exclusions.folders = dedup_nonempty(self.exclusions.folders);
+        // Слова: trim + нормалізація регістру (lowercase) + дедуп. Регістр
+        // нормалізуємо, бо матчинг у ядрі регістронезалежний (на відміну від
+        // шляхів виключень, де регістр зберігаємо як ввів користувач).
+        self.words.always_switch = dedup_nonempty_lower(self.words.always_switch);
+        self.words.never_switch = dedup_nonempty_lower(self.words.never_switch);
         // Тримаємо version у відомому діапазоні (на випадок підробленого файлу).
         if self.version == 0 {
             self.version = SCHEMA_VERSION;
@@ -117,6 +140,19 @@ fn dedup_nonempty(items: Vec<String>) -> Vec<String> {
         let trimmed = raw.trim().to_string();
         if !trimmed.is_empty() && !seen.contains(&trimmed) {
             seen.push(trimmed);
+        }
+    }
+    seen
+}
+
+/// Як [`dedup_nonempty`], але ще нормалізує регістр у lowercase (для слів-винятків,
+/// де матчинг у ядрі регістронезалежний → дублі-варіанти регістру схлопуються).
+fn dedup_nonempty_lower(items: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::with_capacity(items.len());
+    for raw in items {
+        let norm = raw.trim().to_lowercase();
+        if !norm.is_empty() && !seen.contains(&norm) {
+            seen.push(norm);
         }
     }
     seen
@@ -257,5 +293,30 @@ mod tests {
         ];
         let s = s.sanitized();
         assert_eq!(s.exclusions.process_names, vec!["game.exe", "other.exe"]);
+    }
+
+    #[test]
+    fn sanitize_words_trims_lowercases_and_dedups() {
+        let mut s = AppSettings::default();
+        s.words.always_switch = vec![
+            "Лох".into(),
+            "  лох  ".into(), // дубль після trim+lowercase
+            "ЛОХ".into(),     // дубль за регістром
+            "   ".into(),     // порожній
+            "EURUSD".into(),
+        ];
+        s.words.never_switch = vec!["Vec".into(), "vec".into()];
+        let s = s.sanitized();
+        assert_eq!(s.words.always_switch, vec!["лох", "eurusd"]);
+        assert_eq!(s.words.never_switch, vec!["vec"]);
+    }
+
+    #[test]
+    fn words_missing_field_falls_back_to_default() {
+        // Старий settings.json без секції `words` читається без падіння.
+        let partial = r#"{ "enabled": true }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        assert!(s.words.always_switch.is_empty());
+        assert!(s.words.never_switch.is_empty());
     }
 }

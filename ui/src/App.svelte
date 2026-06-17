@@ -18,6 +18,7 @@
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
+      words: { always_switch: [], never_switch: [] },
       detection: { min_word_len: 3, confidence_threshold: 0.75 },
     };
   }
@@ -26,6 +27,8 @@
   /** Останній збережений знімок — база для визначення «брудних» змін. */
   let baseline = $state(JSON.stringify(defaultSettings()));
   let processInput = $state("");
+  let alwaysWordInput = $state("");
+  let neverWordInput = $state("");
   /** @type {"" | "saved" | "saveError" | "loadError"} */
   let statusKey = $state("");
   let statusDetail = $state("");
@@ -85,6 +88,16 @@
   async function addFolder() {
     const path = await pickFolder();
     if (path) addUnique(settings.exclusions.folders, path);
+  }
+
+  function addAlwaysWord() {
+    addUnique(settings.words.always_switch, alwaysWordInput);
+    alwaysWordInput = "";
+  }
+
+  function addNeverWord() {
+    addUnique(settings.words.never_switch, neverWordInput);
+    neverWordInput = "";
   }
 
   async function save() {
@@ -169,6 +182,62 @@
         kindLabel={$t("exclusions.kind.folder")}
         items={settings.exclusions.folders}
         onremove={(i) => settings.exclusions.folders.splice(i, 1)}
+      />
+    </div>
+  </section>
+
+  <!-- Слова-винятки (особистий словник) -->
+  <section class="card">
+    <h2>{$t("section.words.title")}</h2>
+    <p class="desc">{$t("section.words.desc")}</p>
+
+    <div class="word-group">
+      <form
+        class="add-process"
+        onsubmit={(e) => {
+          e.preventDefault();
+          addAlwaysWord();
+        }}
+      >
+        <input
+          type="text"
+          bind:value={alwaysWordInput}
+          placeholder={$t("words.always.placeholder")}
+        />
+        <button type="submit" disabled={!alwaysWordInput.trim()}>
+          {$t("words.add.always")}
+        </button>
+      </form>
+      <RuleList
+        title={$t("words.list.always")}
+        kindLabel={$t("words.kind.always")}
+        items={settings.words.always_switch}
+        onremove={(i) => settings.words.always_switch.splice(i, 1)}
+      />
+    </div>
+
+    <div class="word-group">
+      <form
+        class="add-process"
+        onsubmit={(e) => {
+          e.preventDefault();
+          addNeverWord();
+        }}
+      >
+        <input
+          type="text"
+          bind:value={neverWordInput}
+          placeholder={$t("words.never.placeholder")}
+        />
+        <button type="submit" disabled={!neverWordInput.trim()}>
+          {$t("words.add.never")}
+        </button>
+      </form>
+      <RuleList
+        title={$t("words.list.never")}
+        kindLabel={$t("words.kind.never")}
+        items={settings.words.never_switch}
+        onremove={(i) => settings.words.never_switch.splice(i, 1)}
       />
     </div>
   </section>
@@ -308,6 +377,16 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  .word-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .word-group + .word-group {
+    margin-top: 1rem;
   }
 
   .field {

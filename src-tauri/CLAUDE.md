@@ -21,8 +21,12 @@ Tauri CLI шукає `./src-tauri/tauri.conf.json` у поточній теці 
 дереву. CLI встановлено локально в `ui/node_modules`, але запускати його треба з
 кореня (де лежить `src-tauri/`). `npm run tauri …` з теки `ui/` НЕ знайде проєкт.
 
-`beforeDevCommand`/`beforeBuildCommand` тому використовують `npm --prefix ui run …`,
-щоб vite стартував незалежно від cwd (а cwd при запуску — корінь репо).
+**ГОТЧА (cwd before-команд):** `tauri` CLI запускає `beforeDevCommand`/
+`beforeBuildCommand` з cwd = **батьківської теки `frontendDist`** (`../ui/dist` →
+`ui/`), а НЕ з кореня репо. Тому команди — звичайні `npm run dev` / `npm run build`
+(виконуються вже в `ui/`). НЕ `npm --prefix ui …` — це шукало б `ui/ui/package.json`
+(ENOENT). Раніше це не спливало, бо `build.bat` робив сирий `cargo build` і
+beforeBuildCommand узагалі не виконувався.
 
 ## Як запускати (dev) — з КОРЕНЯ репо `d:\Projects\TypoFix`
 ```powershell
@@ -58,8 +62,16 @@ npm --prefix ui install
 - **Файл:** `settings.json` у Tauri **app config dir** (`app.path().app_config_dir()`).
   На Windows це `%APPDATA%\dev.typofix.app\settings.json` (identifier із conf).
 - **Формат:** pretty-JSON DTO `AppSettings` (version, enabled, language, exclusions
-  {process_names/exe_paths/folders}, detection). Усі поля `#[serde(default)]` →
-  старі/часткові файли читаються без падіння (forward/back-compat).
+  {process_names/exe_paths/folders}, **words {always_switch/never_switch}**, detection).
+  Усі поля `#[serde(default)]` → старі/часткові файли читаються без падіння
+  (forward/back-compat: старий settings.json без `words` → порожні списки).
+- **Секція `words` (винятки по СЛОВАХ, як Punto):** `always_switch` = позитивний
+  особистий словник (слова, які апка ВИЗНАЄ й перемикає — жаргон/нікнейми/forex,
+  напр. `лох`); `never_switch` = per-word veto (слова, які лишати недоторканими).
+  На відміну від `exclusions` (де регістр шляхів зберігається) `sanitized()`
+  нормалізує слова в **lowercase** (+trim+dedup), бо матчинг у ядрі регістронезалежний.
+  UI керує тими ж даними, що й `user.txt` (звір семантику: `always_switch` =
+  позитив, як `user.txt`; обидва йдуть у `WordRules.recognized`).
 - **ПРИВАТНІСТЬ (залізне правило):** у конфіг ідуть ЛИШЕ налаштування. НІКОЛИ
   натиски/буфер/набраний текст — їх тут немає й не повинно бути.
 - **Власний DTO, НЕ типи `typofix-core`:** app-крейт у відокремленому workspace не
@@ -100,9 +112,16 @@ npm --prefix ui install
 - `detector_config_from`: `min_word_len`→`min_switch_len` (прямий). `confidence_threshold`
   (0..1) масштабує `base_threshold` монотонно навколо 0.75=дефолт — **тимчасова**
   евристика (внутрішній поріг — лог-ймовірнісний, не 0..1); справжня калібровка у фазі eval.
-- `load_word_rules(pair, data_dir)`: будує `core::WordRules` із whitelist коротких
-  СЛУЖБОВИХ слів (`data/dicts/{lang}.short.txt` через `typofix_data::load_short_words`,
-  далі `WordRules::allow_short_service` per-`LayoutId`). Вмикає **дзеркальну
+- `load_word_rules(pair, data_dir, words)`: будує `core::WordRules`, **об'єднуючи**
+  файлові джерела з `data/` зі словами-винятками з налаштувань (`&AppSettings.words`):
+  - whitelist коротких СЛУЖБОВИХ слів (`data/dicts/{lang}.short.txt` через
+    `typofix_data::load_short_words`, далі `WordRules::allow_short_service` per-`LayoutId`);
+  - **recognized** (позитив) = `user.txt` ∪ `words.always_switch` → `recognize_word`;
+  - **veto** (ніколи) = `words.never_switch` → `veto_word`;
+  - forex-коди ISO 4217 (`data/dicts/iso4217.txt`).
+  Слова з `words` застосовуються ПОВЕРХ файлових і **не залежать від `data/`** (працюють
+  навіть у fallback-режимі без моделей). Прокид: `sync_runtime`→`apply`→`start_engine`
+  (бере `&settings.words`)→`engine_loop`. Вмикає **дзеркальну
   релаксацію порога** коротких слів у детекторі (`от`/`ти`/`we`...). `data_dir` —
   корінь `data/` (функція додає `dicts/`). Готча: whitelist — НЕ повний словник
   (`ат`/`ді` Є у `uk.fst` як шум, але НЕ у whitelist → код-токени `fn`/`ls` не

@@ -9,10 +9,11 @@
 //! pump, а зупиняється через `WM_QUIT` (`PostThreadMessage` із [`HookHandle`]).
 //!
 //! ## 🔴 Що тут НЕ робиться (інваріант стабільності)
-//! Детекція секретних полів (UIA/`SendMessageTimeoutW`) НЕ висить на цьому потоці —
-//! вона повільна й заблокувала б pump LL-хука (→ `LowLevelHooksTimeout` → лаг
-//! усього системного вводу). Її винесено на ОКРЕМИЙ потік ([`crate::secure_thread`]);
-//! тут лишається лише дешеве. Тому й хук `EVENT_OBJECT_FOCUS` живе там, а не тут.
+//! Детекція секретних полів (UIA/`SendMessageTimeoutW`/`EVENT_OBJECT_FOCUS`) тут НЕ
+//! живе — вона повільна (UIA вмикає a11y-дерево цільової IDE) і лагала ввід.
+//! Наразі цю машинерію **вимкнено цілком** (`is_secure_field` → `false`); тут
+//! лишається лише дешевий `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange`. Деталі
+//! й план редизайну — `CLAUDE.md` §«ДЕТЕКЦІЯ СЕКРЕТНИХ ПОЛІВ ВИМКНЕНА».
 //!
 //! ## Цикл проти власного вводу (критично)
 //! Хук бачить і фізичний ввід, і НАШ `SendInput`. Власні події позначені
@@ -134,8 +135,7 @@ fn hook_thread_main(sender: Sender<InputEvent>, tid_out: Arc<AtomicU32>) {
         let kb_hook: HHOOK = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0);
         let mouse_hook: HHOOK = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0);
         // Зміна вікна на передньому плані — лише для емісії `FocusChange` (дешево).
-        // Перерахунок секретності тут НЕ робимо: він на окремому потоці
-        // (`crate::secure_thread`), бо UIA блокував би pump LL-хука (лаг вводу).
+        // Детекцію секретності тут НЕ робимо (її вимкнено цілком — див. модульний док).
         let fg_hook: HWINEVENTHOOK = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
@@ -275,7 +275,7 @@ unsafe extern "system" fn winevent_proc(
 ) {
     // Зміна вікна на передньому плані: інвалідуємо буфер (FocusChange). Дешево —
     // лише `window_info_for_hwnd` + надсилання в канал; жодного UIA/COM тут (див.
-    // модульний док). Перерахунок секретності — на `crate::secure_thread`.
+    // модульний док). Детекцію секретності вимкнено.
     if event == EVENT_SYSTEM_FOREGROUND {
         let info = window_info_for_hwnd(hwnd);
         HOOK_STATE.with(|s| {

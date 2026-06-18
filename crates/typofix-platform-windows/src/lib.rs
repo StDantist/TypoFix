@@ -22,9 +22,17 @@ mod hook;
 mod inject;
 #[cfg(windows)]
 mod layout;
+// 🔴 ВИМКНЕНО до безпечного редизайну (див. CLAUDE.md §«Секретні поля»): сам
+// ВИКЛИК UIA (`GetFocusedElement`/property) вмикає accessibility-дерево в
+// IDE/Electron/Chromium і гальмує цільовий застосунок — лаг лишався навіть із
+// перерахунком на окремому потоці. Машинерія НЕ задіяна (`WindowsPlatform` її не
+// запускає, `is_secure_field` → завжди `false`); код лишено в дереві для майбутнього
+// редизайну. `#[allow(dead_code)]` — поки не задіяно (інакше ворота `-D warnings`).
 #[cfg(windows)]
+#[allow(dead_code)]
 mod secure;
 #[cfg(windows)]
+#[allow(dead_code)]
 mod secure_thread;
 #[cfg(windows)]
 mod selection;
@@ -59,7 +67,6 @@ mod windows_impl {
     use typofix_platform::{Action, InputEvent, LayoutId, Platform, WindowInfo};
 
     use crate::hook::HookHandle;
-    use crate::secure_thread::SecureHandle;
     use crate::{inject, layout, window};
 
     /// Жива реалізація [`Platform`] для Windows.
@@ -71,28 +78,22 @@ mod windows_impl {
         rx: Receiver<InputEvent>,
         /// Живий хук-потік; Drop зупиняє його коректно. Поле тримає його живим.
         _hook: HookHandle,
-        /// Окремий потік детекції секретних полів (WinEvent фокуса + UIA); Drop
-        /// зупиняє його. Винесений з `_hook`, щоб важкий UIA не блокував LL-pump.
-        _secure: SecureHandle,
     }
 
     impl WindowsPlatform {
         /// Встановити хуки й почати приймати події.
         ///
         /// ⚠️ Побічний ефект для всієї системи: ставить `WH_KEYBOARD_LL` /
-        /// `WH_MOUSE_LL` (потік `_hook`) і WinEvent focus-хуки (потік `_secure`).
-        /// Для автотестів використовуй чисті модулі (`keystate`/`scancode`) або
-        /// запити без хука (`layout`/`window`).
+        /// `WH_MOUSE_LL` (потік `_hook`). Для автотестів використовуй чисті модулі
+        /// (`keystate`/`scancode`) або запити без хука (`layout`/`window`).
+        ///
+        /// 🔴 Детекцію секретних полів (`SecureHandle`/UIA) ВИМКНЕНО — НЕ запускаємо
+        /// потік `typofix-secure`, бо виклик UIA лагав цільові IDE/Electron (a11y-
+        /// дерево). Деталі й план редизайну — CLAUDE.md §«Секретні поля».
         pub fn new() -> Self {
             let (tx, rx) = channel();
             let hook = HookHandle::start(tx);
-            // Детекція секретних полів — на власному потоці (інакше UIA лагав би ввід).
-            let secure = SecureHandle::start();
-            Self {
-                rx,
-                _hook: hook,
-                _secure: secure,
-            }
+            Self { rx, _hook: hook }
         }
     }
 
@@ -133,11 +134,13 @@ mod windows_impl {
         }
 
         fn is_secure_field(&self) -> bool {
-            // Hot-path: лише читаємо кеш (дешево, без блокувань). Перерахунок
-            // (нативна перевірка + UIA) робить хук-потік на зміні фокуса —
-            // див. `secure`/`hook`. Покриває нативні ES_PASSWORD/passwordchar
-            // поля + UIA IsPassword (WinRAR-combo, веб/Electron).
-            crate::secure::cached_is_secure()
+            // 🔴 ВИМКНЕНО (тимчасово, до безпечного редизайну): завжди `false`.
+            // Машинерія детекції (UIA `IsPassword` + нативний ES_PASSWORD/
+            // passwordchar, кеш на зміні фокуса) лагала ввід — сам виклик UIA
+            // вмикає accessibility-дерево IDE/Electron. Плумбінг `Context.secure`
+            // у core/runtime лишається ЯК Є (просто завжди false) → нульовий
+            // оверхед і поведінка точно як до коміту 7be0124. Деталі — CLAUDE.md.
+            false
         }
     }
 }

@@ -724,18 +724,43 @@ fn capslock_fix(word: &str, current: &LanguageProfile) -> Option<String> {
 /// - [`capslock_fix`] — випадковий CapsLock (інвертований регістр: `пРИВІТ`),
 ///   гейт [`DetectorConfig::capslock_fix_enabled`].
 ///
-/// Якщо детектор уже вирішив перемкнути мову — це основний кейс, його лишаємо
-/// (комбінований layout+caps — свідомий follow-up). Інакше: слово вже в правильній
-/// мові, і якщо його регістр має патерн однієї з евристик, перетворюємо рішення на
+/// **Комбінований layout+caps кейс** (`GHBdsn`→`Привіт`): якщо рішення вже перемикає
+/// МОВУ, а `best_text` несе слід перетриманого Shift / випадкового CapsLock
+/// (`ПРИвіт`), нормалізуємо РЕГІСТР `best_text` ПЕРЕД перенабором — лишаючи
+/// layout-switch (далі емітиться `SwitchLayout`). Той самий precision-замок: правимо
+/// лише якщо нормалізований варіант — РЕАЛЬНЕ слово у словнику МОВИ `best` (на цьому
+/// шляху `best_text` і так dict-hit). Інакше (немає layout-switch): слово вже в
+/// правильній мові, і якщо регістр має патерн евристики, перетворюємо рішення на
 /// чисту caps-корекцію (`caps_only`).
 fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
+    let cfg = &ctx.config;
+
+    // Комбінований layout+caps: нормалізуємо РЕГІСТР `best_text` (у МОВІ best), але
+    // НЕ чіпаємо сам факт layout-switch. ALL-CAPS/коректний mixed-case евристики
+    // відсікають самі (як для standalone); veto поважаємо.
     if d.switch {
-        return d; // розкладко-перемикання — основний кейс, caps не нашаровуємо
+        if let Some(best) = ctx.languages.iter().find(|p| p.id == d.best) {
+            let fixed = cfg
+                .case_fix_enabled
+                .then(|| overheld_shift_fix(&d.best_text, best))
+                .flatten()
+                .or_else(|| {
+                    cfg.capslock_fix_enabled
+                        .then(|| capslock_fix(&d.best_text, best))
+                        .flatten()
+                });
+            if let Some(fixed) = fixed {
+                if !ctx.rules.vetoes(&d.current_text, &fixed) {
+                    d.best_text = fixed;
+                }
+            }
+        }
+        return d;
     }
+
     let Some(current) = ctx.current_profile() else {
         return d;
     };
-    let cfg = &ctx.config;
     // Патерни взаємовиключні (провідні великі ⊥ перша мала), тож порядок безпечний.
     let fixed = cfg
         .case_fix_enabled
@@ -1742,14 +1767,14 @@ mod tests {
     }
 
     #[test]
-    fn combined_layout_and_caps_does_layout_switch_only() {
+    fn combined_layout_and_caps_normalizes_best_text_case() {
         // Комбінований кейс (слово і в неправильній розкладці, і з перетриманим
-        // Shift): основний кейс — розкладка. Caps-корекція НЕ нашаровується
-        // (свідомий follow-up: без подвійних суперечливих дій). Перенабір дає
-        // слово в правильній МОВІ, але з тим самим регістром (`ПРивіт`).
+        // Shift): основний кейс — розкладка (layout-switch, НЕ `caps_only`), АЛЕ
+        // `best_text` нормалізується за регістром (`ПРивіт`→`Привіт`). КОНТРАКТ
+        // ЗМІНЕНО: раніше регістр зберігався (follow-up) — тепер фікс реалізовано.
         let langs = [en_profile(), uk_profile()];
         let ctx = ctx_with(&langs, "en");
-        // У EN з SHIFT на перших двох: "GHbdsn"; у UK: "ПРивіт".
+        // У EN з SHIFT на перших двох: "GHbdsn"; у UK: "ПРивіт" → нормал. "Привіт".
         let d = decide(
             &strokes_shift(&[
                 (0x22, true),
@@ -1763,9 +1788,15 @@ mod tests {
         );
         assert_eq!(d.current_text, "GHbdsn");
         assert!(d.switch, "перемикання розкладки — основний кейс");
-        assert!(!d.caps_only, "це layout-перемикання, не caps-корекція");
+        assert!(
+            !d.caps_only,
+            "це layout-перемикання, не чиста caps-корекція"
+        );
         assert_eq!(d.best, LayoutId::new("uk"));
-        assert_eq!(d.best_text, "ПРивіт", "регістр зберігається (follow-up)");
+        assert_eq!(
+            d.best_text, "Привіт",
+            "регістр best_text нормалізується перед перенабором"
+        );
     }
 
     // --- НОВЕ: виправлення випадкового CapsLock (інвертований регістр) --------

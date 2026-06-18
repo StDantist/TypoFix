@@ -390,11 +390,17 @@ recall — за сумніву НЕ перемикати.**
   розкладка; лише `DeleteChars`+`TypeUnicode` з виправленим регістром). veto/learned
   захищають precision і тут (`apply_caps_fix` перевіряє `rules.vetoes`; engine —
   learned-veto/rejection-undo, бо `switch=true`).
-- **Комбінований layout+caps кейс — свідомий FOLLOW-UP.** Якщо слово ВОДНОЧАС у
-  неправильній розкладці І з перетриманим Shift (`GHbdsn`→uk), основний кейс —
-  розкладка: `apply_caps_fix` НЕ нашаровується на `d.switch==true` (без подвійних
-  суперечливих дій). Перенабір дасть правильну МОВУ, але збереже регістр (`ПРивіт`).
-  Розширити = нормалізувати `best_text` і для layout-switch (precision: він уже dict-hit).
+- **Комбінований layout+caps кейс — ЗРОБЛЕНО.** Якщо слово ВОДНОЧАС у неправильній
+  розкладці І з перетриманим Shift/CapsLock (`GHBdsn`→uk), `apply_caps_fix` для
+  `d.switch==true` НОРМАЛІЗУЄ РЕГІСТР `best_text` (`ПРИвіт`→`Привіт`) ПЕРЕД перенабором,
+  лишаючи layout-switch (`SwitchLayout` далі емітиться, `caps_only` НЕ виставляється).
+  Той самий патерн (`overheld_shift_fix`/`capslock_fix`, гейти `case_fix_enabled`/
+  `capslock_fix_enabled`) і той самий precision-замок, але звірка зі словником МОВИ
+  `best` (не `current_profile`). ALL-CAPS/коректний mixed-case евристики відсікають
+  самі; veto поважаємо. Чистий layout-switch без caps (`ghbdsn`→`привіт`) лишається
+  малим. Стереже E2E `combined_layout_switch_and_overheld_shift_normalizes_case` +
+  `combined_layout_switch_without_caps_stays_lowercase` (`tests/caps_correction.rs`)
+  + юніт `combined_layout_and_caps_normalizes_best_text_case`.
 - ⚠️ **Eval-харнес СЛІПИЙ до caps:** його метрика — `switch && best==intended_layout`,
   а caps лишає `best==current_layout` → жодного впливу на TP/FP/FN (доведено:
   числа ідентичні з фічею й без). Покриття — герметичні юніти `caps_*` у `detector`

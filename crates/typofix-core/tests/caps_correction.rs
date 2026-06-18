@@ -137,6 +137,67 @@ fn overheld_shift_three_caps_is_normalized() {
 }
 
 #[test]
+fn combined_layout_switch_and_overheld_shift_normalizes_case() {
+    // КОМБІНОВАНИЙ кейс (репро власника): `GHBdsn` — і НЕ та розкладка (current=en,
+    // на екрані латиниця), і перетриманий Shift (3 провідні великі). Перенабір має
+    // дати правильну МОВУ І правильний регістр: `Привіт`, а НЕ `ПРИвіт`.
+    let langs = [profile("uk"), profile("en")];
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("GHBdsn "); // латинські крякозябри з касою + надрукований пробіл
+    platform.enqueue_all([
+        key_mod(G, SHIFT),
+        key_mod(H, SHIFT),
+        key_mod(B, SHIFT),
+        key(D),
+        key(S),
+        key(N),
+        key(SPACE),
+    ]);
+
+    run(&mut platform, &langs);
+
+    assert_eq!(
+        platform.text(),
+        "Привіт ",
+        "перенабір має дати правильну мову І нормалізований регістр"
+    );
+    assert_eq!(
+        platform.current_layout(),
+        LayoutId::new("uk"),
+        "це ВСЕ Ж layout-перемикання → розкладка міняється на uk"
+    );
+    // Стерти слово+пробіл (7), перемкнути на uk, вписати «Привіт » (нормалізований).
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            Action::DeleteChars(7),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("Привіт ".into()),
+        ],
+        "комбінований кейс: layout-switch + нормалізований регістр"
+    );
+}
+
+#[test]
+fn combined_layout_switch_without_caps_stays_lowercase() {
+    // Контроль: чистий layout-switch БЕЗ перетриманого Shift (`ghbdsn`) лишається
+    // малим `привіт` — нормалізація НЕ нав'язує капіталізацію коректному вводу.
+    let langs = [profile("uk"), profile("en")];
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("ghbdsn ");
+    platform.enqueue_all([key(G), key(H), key(B), key(D), key(S), key(N), key(SPACE)]);
+
+    run(&mut platform, &langs);
+
+    assert_eq!(platform.text(), "привіт ", "малий ввід лишається малим");
+    assert_eq!(platform.current_layout(), LayoutId::new("uk"));
+}
+
+#[test]
 fn all_caps_word_is_left_untouched() {
     // `ПРИВІТ` — повністю велике (навмисний капс/акронім) → не чіпати.
     let langs = [profile("uk"), profile("en")];

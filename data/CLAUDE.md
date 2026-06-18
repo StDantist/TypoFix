@@ -28,7 +28,11 @@
     1. `bash data/fetch_corpora.sh` — завантажує дампи в `corpora/` (gitignored).
     2. `python data/clean_corpus.py` — монолінгвальне очищення (лише цільовий
        алфавіт+апострофи, як `lm::tokenize`) → `corpora/{lang}.clean.txt` +
-       `corpora/{lang}.words.txt` (частота ≥5).
+       `corpora/{lang}.words.txt` (частота ≥5). **`JUNK_SHORT`** (у скрипті) відкидає
+       сміттєві КОРОТКІ токени (напр. `nf`), що потрапили в корпус як OCR-шум і ХИБНО
+       блокували перемикання частих двійників іншою мовою (`nf` ∈ en.fst →
+       `current_is_dict` блокував укр. `та`). Лише ЯВНЕ сміття — реальні абревіатури
+       (`db`/`bp`/`lt`/`ye`) лишаються (precision-захист у ядрі). Деталі: core CLAUDE.md.
     3. `cargo run -p typofix-data --bin train_models` → `lm/{lang}.bin`,
        `dicts/{lang}.fst` (gitignored).
     4. `cargo run -p typofix-data --bin calibrate` — метрики (бере реальні

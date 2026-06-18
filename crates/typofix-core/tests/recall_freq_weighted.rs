@@ -1,13 +1,13 @@
 //! Регресія частотно-зваженого dict-бонусу (`detector::score`, `FrequencyMap`).
 //!
-//! **Цільовий баг — `ну`↔`ye`:** обидва двійники — РЕАЛЬНІ слова (укр. вигук `ну`
-//! і архаїчне англ. `ye`), обидва у своїх словниках. Бінарний dict-бонус
-//! скасовується, LM майже рівні → детектор НЕ перемикав. Частотний шар розрізняє:
-//! нормалізована log-ймовірність `ну`(≈−5.85) ≫ `ye`(≈−11.1), тож коротко-словний
-//! гейт відкривається по ЧАСТОТНІЙ маржі й перемикання відбувається.
-//!
-//! **Precision-бік:** часте англ. слово, чий укр. двійник теж є в словнику, але
-//! РІДКІСНИЙ (`us`↔`гі`), лишається англійським — частота захищає легітимний ввід.
+//! **⚠️ КОНТРАКТ `ну`↔`ye` ПЕРЕВЕРНУТО precision-аудитом.** Раніше частота
+//! перемикала `ну` над архаїчним `ye` (обидва — реальні слова). АЛЕ для КОРОТКОГО
+//! слова (len≤2), коли поточний текст — РЕАЛЬНЕ слово своєї мови (`ye`/`db`/`lt`
+//! у словнику), `current_is_dict` тепер БЛОКУЄ перемикання незалежно від частоти
+//! (precision-first: користувач міг мати на увазі англ. `ye`/database/less-than).
+//! Частота веде data-driven перемикання лише коли поточний двійник — НЕ слово
+//! (`та`/`що`/`от`). Частотний ШАР як такий (градуйований бал) лишається — він
+//! живить `best_score.freq` для data-driven гейта й precision-гард `us`↔`гі`.
 //!
 //! Вантажить РЕАЛЬНІ моделі+частоти з `data/` (`{lang}.bin/.fst/.freq.fst`). Нема
 //! їх (CI, gitignored) → SKIP; герметичне покриття механіки — юніти `freq_*` у
@@ -55,15 +55,6 @@ fn real_profiles_with_freq() -> Option<Vec<LanguageProfile>> {
     Some(v)
 }
 
-/// Те саме, але БЕЗ частотного шару (`freq: None`) — контроль причинності.
-fn real_profiles_no_freq() -> Option<Vec<LanguageProfile>> {
-    let mut v = real_profiles_with_freq()?;
-    for p in &mut v {
-        p.freq = None;
-    }
-    Some(v)
-}
-
 /// Фізичні страйки слова, як його НАБИРАЮТЬ у заданій розкладці (зворотний індекс).
 fn strokes_in(layout: &Layout, word: &str) -> Vec<KeyStroke> {
     word.chars()
@@ -84,60 +75,42 @@ fn ctx<'a>(langs: &'a [LanguageProfile], current: &str, rules: &'a WordRules) ->
 }
 
 #[test]
-fn nu_switches_over_archaic_ye() {
+fn nu_does_not_switch_because_ye_is_real_en() {
+    // КОНТРАКТ ПЕРЕВЕРНУТО (precision-аудит): `ye` — РЕАЛЬНЕ (архаїчне) англ. слово
+    // у en.fst, тож для короткого слова `current_is_dict` блокує перемикання
+    // незалежно від частоти. `ye`→`ну` був у списку FP власника (як db/bp/lt/nt).
     let Some(langs) = real_profiles_with_freq() else {
         eprintln!("SKIP: реальні моделі/частоти відсутні");
         return;
     };
     let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
     let uk = &langs[0].layout;
-    // «ну», набране в EN-розкладці → на екрані «ye» (архаїчне англ. слово у словнику).
     let strokes = strokes_in(uk, "ну");
     let d = detector::decide(&strokes, &ctx(&langs, "en", &rules));
     assert_eq!(d.current_text, "ye", "двійник на екрані має бути 'ye'");
     assert!(
-        d.switch && d.best == LayoutId::new("uk") && d.best_text == "ну",
-        "часте 'ну' має перемкнутись над рідкісним 'ye' (switch={} best={} '{}' conf={:.2})",
-        d.switch,
-        d.best.as_str(),
-        d.best_text,
-        d.confidence
-    );
-}
-
-#[test]
-fn nu_does_not_switch_without_freq_layer() {
-    // Контроль причинності: БЕЗ частотного шару (freq=None) той самий «ну»↔«ye»
-    // НЕ перемикається — саме частота розв'язує кейс, не щось інше.
-    let Some(langs) = real_profiles_no_freq() else {
-        eprintln!("SKIP: реальні моделі відсутні");
-        return;
-    };
-    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
-    let uk = &langs[0].layout;
-    let d = detector::decide(&strokes_in(uk, "ну"), &ctx(&langs, "en", &rules));
-    assert_eq!(d.current_text, "ye");
-    assert!(
         !d.switch,
-        "без частотного шару 'ну'↔'ye' не мав перемикатись (conf={:.2}) — це й був баг",
+        "реальне англ. 'ye' (у словнику) НЕ сміє перемикатись на 'ну' (conf={:.2})",
         d.confidence
     );
 }
 
 #[test]
-fn frequent_uk_twins_switch_over_real_but_rare_en() {
-    // Інші «обидва-реальні-слова» кейси, де укр. набагато частіше за en-двійник.
+fn frequent_uk_twins_switch_when_en_twin_not_a_word() {
+    // Позитивний бік: часті укр. слова, чий en-двійник — НЕ реальне слово
+    // (`от`→`jn`, `то`→`nj`, `що`→`oj` — жодного нема в en.fst), перемикаються
+    // по ЧАСТОТІ (data-driven). Контраст із `ну`(ye, реальне) вище.
     let Some(langs) = real_profiles_with_freq() else {
         eprintln!("SKIP: реальні моделі/частоти відсутні");
         return;
     };
     let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
     let uk = &langs[0].layout;
-    for w in ["ну", "от"] {
+    for w in ["от", "то", "що"] {
         let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
         assert!(
             d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
-            "часте укр. '{w}' має перемкнутись (switch={} best={} '{}' conf={:.2})",
+            "часте укр. '{w}' (en-двійник НЕ слово) має перемкнутись (switch={} best={} '{}' conf={:.2})",
             d.switch,
             d.best.as_str(),
             d.best_text,

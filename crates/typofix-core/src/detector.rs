@@ -149,6 +149,28 @@ pub struct DetectorConfig {
     /// вище). Це і є умова «двійник НЕ справжнє слово» (поряд із «не в словнику»).
     /// Дефолт `0.0`: біліберда має LM ≪ 0; справжні короткі слова — LM > 0.
     pub short_word_twin_lm_max: f64,
+    /// **DATA-DRIVEN поріг частоти для коротко-словного перемикання.** Мінімальна
+    /// частотна надбавка (`CandidateScore.freq` = `max(0, lp − freq_floor)`) укр.
+    /// кандидата, за якої коротке (len 2..=`short_word_max_len`) слово перемикається
+    /// БЕЗ ручного whitelist. Це головний регулятор precision/recall короткого
+    /// перемикання: ЧАСТІ укр. слова (`та`≈2.83/`що`≈4.79/`то`≈3.15/`як`≈3.72/
+    /// `чи`≈2.49/`бо`≈2.0/`ні`≈3.47) проходять, а словниковий ШУМ корпусу
+    /// (`ат`/`ді`/`св`/`ге` ≈ 0.0, бо нижче `freq_floor`) — НІ. Дефолт `2.0`
+    /// (= `lp ≥ −7.0`): калібровано на eval — позитиви ≥ 2.0, шум = 0.0, чистий
+    /// розрив. Ручний `uk.short.txt` лишається ДОДАТКОВИМ override (жаргон/forex/
+    /// рідкісні службові поза частотним покриттям). Одиночні (len==1) — НІКОЛИ.
+    pub short_word_freq_switch_min: f64,
+    /// **Precision-гейт частоти ПОТОЧНОГО (en) тексту — У КОН'ЮНКЦІЇ з
+    /// `!current_is_dict`.** Коротке слово перемикається лише якщо поточний двійник
+    /// `!current_is_dict && current_score.freq < short_word_current_freq_max`. ⚠️
+    /// **Частотний гейт — ДОДАТКОВИЙ, НЕ заміна dict-блоку.** Багато легітимних
+    /// 2-літерних англ. токенів РІДКІСНІ в корпусі (OpenSubtitles): `db`/`bp`/`lt`/
+    /// `nt`/`ye` мають freq < 1.0, тож САМ частотний гейт їх не блокував би → хибне
+    /// перемикання `db`→`ви`,`bp`→`из` (домен власника: database/Forex). `current_is_dict`
+    /// захищає ВСІ члени `en.fst`; частота ловить часті слова ПОЗА словником. Recall
+    /// сміттєвих двійників (`nf`→`та`) чинимо ЧИЩЕННЯМ ДАНИХ (прибрати шум з en-корпусу),
+    /// НЕ послабленням гейта. Дефолт `1.0`.
+    pub short_word_current_freq_max: f64,
     /// **Прапорець фонотактичного сигналу** (default `true`). В українській НЕМАЄ
     /// слів, що починаються з «ь» — таке читання НЕМОЖЛИВЕ → перемкнути на латиницю
     /// (за умови правдоподібного EN-двійника). Вимкнення → сигнал ігнорується
@@ -193,6 +215,8 @@ impl Default for DetectorConfig {
             short_word_lm_margin: 2.0,
             short_word_freq_margin: 2.0,
             short_word_twin_lm_max: 0.0,
+            short_word_freq_switch_min: 2.0,
+            short_word_current_freq_max: 1.0,
             phonotactics_enabled: true,
             phonotactic_twin_lm_margin: 0.0,
             extensions_enabled: true,
@@ -492,34 +516,58 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let vetoed = ctx.rules.vetoes(&current_text, &best_text);
     let forced = ctx.rules.forces(&current_text);
 
-    // Стандартний шлях: довжина + поріг + (для коротких) LM-перевага кандидата.
-    let standard_ok = len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok;
+    // **Precision-замок коротких слів — CONFIG-НЕЗАЛЕЖНИЙ.** Для КОРОТКОГО слова
+    // (len ≤ short_word_max_len) НЕ перемикаємо, якщо поточний текст — реальне
+    // слово СВОЄЇ мови (`current_is_dict`): db=database, lt=less-than, ye, bp(Forex)…
+    // Інакше `standard_ok` (при `min_switch_len=2`) обходив би dict-блок гілки
+    // short_word_switch і хибно перемикав би їх (`db`→`ви`). Спільний для ОБОХ
+    // шляхів, тож захист не залежить від користувацького `min_switch_len`.
+    let short_word_current_protected = len <= cfg.short_word_max_len && current_is_dict;
 
-    // **Дзеркальна релаксація для коротких слів (2 ≤ len ≤ short_word_max_len).**
-    // Принцип «справжнє слово ↔ біліберда»: перемикаємо коротке, якщо
-    //   (а) кандидат — куроване СЛУЖБОВЕ слово цільової мови (whitelist у `rules`,
-    //       не довільний збіг у повному словнику — інакше шум `ат`/`ді` від
-    //       корпусу пробивав би поріг, як код-токени `fn`/`ls`); І
-    //   (б) джерельний двійник НЕ справжнє слово: його немає у словнику вихідної
-    //       мови (`!current_is_dict`) І його LM нижча за стелю (фонотактично
-    //       неправдоподібний). Тоді `от`/`ти`/`чи` форсяться на dict-hit, а реальні
-    //       короткі `is`/`to`/`db` — НІ (їхній двійник — теж справжнє слово → умова
-    //       (б) хибна). Поріг/LM-маржу обходимо (dict-hit достатньо), але НЕ veto,
-    //       НЕ `best≠current` і **НЕ `min_switch_len`** (саме в цьому суть дзеркала).
+    // Стандартний шлях: довжина + поріг + (для коротких) LM-перевага кандидата.
+    let standard_ok = len >= cfg.min_switch_len
+        && confidence > cfg.threshold(len)
+        && short_word_ok
+        && !short_word_current_protected;
+
+    // **DATA-DRIVEN коротко-словне перемикання (2 ≤ len ≤ short_word_max_len).**
+    // Принцип «справжнє ЧАСТЕ слово ↔ біліберда»: перемикаємо коротке, якщо
+    //   (а) укр-кандидат — РЕАЛЬНЕ ЧАСТЕ слово: є у словнику (`best_is_dict`) І його
+    //       частота вища за поріг (`best_score.freq >= short_word_freq_switch_min`).
+    //       Частота — головний фільтр: `та`/`що`/`то`/`як`/`чи`/`бо`/`ні` (term ≥ 2.0)
+    //       проходять АВТОМАТИЧНО з частотного словника, а словниковий ШУМ корпусу
+    //       (`ат`/`ді`/`св`/`ге`, term ≈ 0.0 — нижче `freq_floor`) — НІ, як і
+    //       код-токени `fn`→`ат`/`ls`→`ді`. Ручний whitelist (`is_short_service`) —
+    //       лише ДОДАТКОВИЙ override (жаргон/рідкісні службові поза частотним
+    //       покриттям); більше НЕ єдиний шлях. І
+    //   (б) джерельний двійник НЕ справжнє слово: `current_not_frequent` —
+    //       КОН'ЮНКЦІЯ двох умов (див. нижче) `!current_is_dict && freq < стеля` — І
+    //       LM нижча за стелю (фонотактично неправдоподібний). Тримає precision на
+    //       АНГЛ. коротких: реальні англ. (`of`/`it`/`db`/`bp`/`lt`) НЕ чіпаємо.
+    //   Поріг/LM-маржу обходимо (частий dict-hit достатньо), але НЕ veto, НЕ
+    //   `best≠current` і **НЕ `min_switch_len`**.
     // **⚠️ НИЖНЯ МЕЖА = ЛІТЕРАЛ `2`, НЕ `cfg.min_switch_len` (критична готча!).**
-    // Семантика межі — «не ОДИНОЧНИЙ токен» (замок precision проти коми `,`=`б`,
-    // що форситься на whitelist-«б»; len=1 досі заблоковано). Дзеркало ЗАВЖДИ було
-    // задумане обходити `min_switch_len` для коротких службових слів — тож в'язати
-    // межу до `cfg.min_switch_len` було ПОМИЛКОЮ: рантаймовий `min_word_len=3`
-    // (`src-tauri`) → `min_switch_len=3` → дзеркало вбивало ВСІ 2-літерні (`то`/`що`
-    // не перемикалися живцем, хоча всі тести на `default()`=2 цього не ловили).
-    // Літерал `2` відновлює 2-літерні службові слова НЕЗАЛЕЖНО від користувацького
-    // порога. Одиночні («б»/«о»/«я») лишаються заблокованими (precision > recall).
-    let mirror_ok = len >= 2
+    // Семантика — «не ОДИНОЧНИЙ токен» (замок precision проти коми `,`=`б`; len==1
+    // заблоковано). Шлях ЗАВЖДИ задуманий обходити `min_switch_len` — в'язати межу
+    // до нього було ПОМИЛКОЮ: рантаймовий `min_word_len=3` → `min_switch_len=3`
+    // вбивав ВСІ 2-літерні (`то`/`що`/`та` не перемикалися живцем; тести на
+    // `default()`=2 цього не ловили). Літерал `2` відновлює їх незалежно від порога.
+    let twin_frequent = best_score.freq >= cfg.short_word_freq_switch_min;
+    // ДВА precision-гейти на ПОТОЧНИЙ (en) текст У КОН'ЮНКЦІЇ:
+    //  (1) `!current_is_dict` — НЕ член словника. Захищає РІДКІСНІ-але-реальні
+    //      2-літерні англ. токени, що Є в `en.fst` (`db`/`bp`/`lt`/`nt`/`ye`/`yt`…):
+    //      їхня корпусна частота низька (OpenSubtitles), тож самого freq-гейта МАЛО —
+    //      без dict-блоку вони хибно перемикались би (db=database, yt=YouTube,
+    //      bp=Forex). Recall сміттєвих двійників (`nf`→`та`) чинимо ЧИЩЕННЯМ ДАНИХ
+    //      (прибрати сміття з en-корпусу), НЕ послабленням цього гейта.
+    //  (2) `freq < short_word_current_freq_max` — і НЕ частий поза словником.
+    let current_not_frequent =
+        !current_is_dict && current_score.freq < cfg.short_word_current_freq_max;
+    let short_word_switch = len >= 2
         && len <= cfg.short_word_max_len
         && best_is_dict
-        && ctx.rules.is_short_service(&best, &best_text)
-        && !current_is_dict
+        && (twin_frequent || ctx.rules.is_short_service(&best, &best_text))
+        && current_not_frequent
         && current_score.lm < cfg.short_word_twin_lm_max
         && confidence > cfg.base_threshold;
 
@@ -528,7 +576,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
         && !vetoed
         && (forced
             || standard_ok
-            || mirror_ok
+            || short_word_switch
             || forex_forced
             || extension_forced
             || phonotactic_forced);
@@ -1891,18 +1939,57 @@ mod tests {
     }
 
     #[test]
-    fn freq_switches_nu_over_archaic_ye() {
-        // ну(часте)↔ye(рідкісне): обидва у словниках; частота відкриває гейт.
+    fn rare_en_dict_twin_blocks_short_switch_nu_ye() {
+        // КОНТРАКТ ЗМІНЕНО (precision-аудит): раніше тут стверджувалося, що часте
+        // `ну` перемикається над рідкісним `ye`. Тепер — НІ: `ye` Є реальним (хай
+        // архаїчним) англ. словом у словнику, тож для КОРОТКОГО слова (len≤2)
+        // `current_is_dict` БЛОКУЄ перемикання незалежно від частоти. Це домен
+        // власника: db=database, bp=Forex, ye/lt/nt — реальні токени, які НЕ можна
+        // чіпати. Частота тепер веде data-driven шлях лише коли поточний текст —
+        // НЕ слово (`та`/`що`/`то`); коли обидва — слова, виграє precision.
         let langs = [
             freq_en_profile(Some(en_freq_rare_ye())),
             freq_uk_profile(Some(uk_freq_common_nu())),
         ];
         let ctx = ctx_with(&langs, "en");
-        let d = decide(&strokes(&[0x15, 0x12]), &ctx); // en "ye" / uk "ну"
+        let d = decide(&strokes(&[0x15, 0x12]), &ctx); // en "ye" (слово) / uk "ну"
+        assert_eq!(d.current_text, "ye");
+        assert!(
+            !d.switch,
+            "реальне англ. 'ye' (у словнику) НЕ сміє перемикатись на 'ну' (conf={:.2})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn frequency_opens_short_switch_when_current_is_not_a_word() {
+        // Позитивний бік контракту: коли поточний текст — НЕ слово (гібериш),
+        // ЧАСТОТА укр-кандидата (`best_score.freq >= short_word_freq_switch_min`)
+        // САМА відкриває коротко-словне перемикання (data-driven, без whitelist).
+        // En-профіль БЕЗ `ye` у словнику → `current_is_dict=false` → гейт пускає.
+        let en_no_ye = {
+            let layout = Layout::new(
+                LayoutId::new("en"),
+                [
+                    (0x15, KeyCap::letter('y', 'Y')),
+                    (0x12, KeyCap::letter('e', 'E')),
+                ],
+            );
+            LanguageProfile {
+                id: LayoutId::new("en"),
+                layout,
+                lm: NgramModel::train("the and for old", 3, 0.5),
+                dict: Dictionary::from_words(["the", "old"]).unwrap(),
+                freq: Some(en_freq_rare_ye()),
+            }
+        };
+        let langs = [en_no_ye, freq_uk_profile(Some(uk_freq_common_nu()))];
+        let ctx = ctx_with(&langs, "en");
+        let d = decide(&strokes(&[0x15, 0x12]), &ctx); // en "ye" (НЕ слово) / uk "ну"
         assert_eq!(d.current_text, "ye");
         assert!(
             d.switch && d.best == LayoutId::new("uk") && d.best_text == "ну",
-            "часте 'ну' має перемкнутись над рідкісним 'ye' (switch={} best={} conf={:.2})",
+            "часте 'ну' має перемкнутись, коли 'ye' НЕ слово (switch={} best={} conf={:.2})",
             d.switch,
             d.best.as_str(),
             d.confidence

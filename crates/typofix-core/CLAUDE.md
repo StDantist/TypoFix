@@ -178,20 +178,56 @@
   `tests/recall_phonotactic_ext.rs` (реальні: `mb`→`ьи`, `txt`/`pdf`/`json`/`html`,
   ризикові `doc`/`log`/`go` в EN не ламаються).
 
-## Дзеркальна релаксація порога для КОРОТКИХ службових слів (готча!)
+## DATA-DRIVEN коротко-словне перемикання (`short_word_switch`) (готча!)
 
-**Неочевидне:** короткі службові слова (`і`,`ти`,`чи`,`от`,`we`,`is`-двійники)
-зазвичай НЕ пробивають жорсткий короткий поріг (`threshold(1)=5.0`, min_switch_len
-блокує len=1, а `short_word_lm_margin` блокує len=2 без LM-переваги). Щоб підняти
-recall на них без втрати precision, у `eval_branch` додано **дзеркальну гілку**
-(«справжнє слово ↔ біліберда»): для `min_switch_len ≤ len ≤ short_word_max_len`
-(дефолт: РІВНО `len==2`) перемикаємо на ОДИНОЧНИЙ dict-hit, ЯКЩО
-- **(а)** кандидат — куроване СЛУЖБОВЕ слово цільової мови:
-  `ctx.rules.is_short_service(&best, &best_text)` (whitelist
-  `data/dicts/{lang}.short.txt` через `WordRules`, НЕ повний словник), І
-- **(б)** джерельний двійник НЕ справжнє слово: `!current_is_dict` І
+**Неочевидне:** короткі слова (len 2..=`short_word_max_len`) НЕ пробивають
+звичайний короткий поріг (`threshold(2)` суворий; при рантаймовому `min_switch_len=3`
+`standard_ok` для len=2 взагалі мертвий). Раніше їх рятував ЛИШЕ ручний whitelist
+(`uk.short.txt`) — гра в кота-мишки (власник додавав слова по одному). **Тепер
+покриття частих слів — DATA-DRIVEN із частотного словника**, whitelist лише override.
+
+У `eval_branch` `short_word_switch` (колишній `mirror_ok`) перемикає коротке, ЯКЩО:
+- **(а) укр-кандидат РЕАЛЬНЕ ЧАСТЕ слово:** `best_is_dict` І
+  `best_score.freq >= short_word_freq_switch_min` (дефолт `2.0`) **АБО** whitelist
+  override `is_short_service`. Частота (`CandidateScore.freq` = `max(0, lp−freq_floor)`)
+  — головний фільтр: `та`≈2.83/`що`≈4.79/`то`≈3.15/`як`≈3.72/`чи`≈2.49/`бо`≈2.0/
+  `ні`≈3.47 проходять АВТОМАТИЧНО, а словниковий ШУМ корпусу `ат`/`ді`/`св`/`ге`≈0.0
+  (нижче `freq_floor=−9`) — НІ. І
+- **(б) поточний (en) текст НЕ справжнє часте слово:** `!current_is_dict &&
+  current_score.freq < short_word_current_freq_max` (дефолт `1.0`) І
   `current_score.lm < short_word_twin_lm_max` (дефолт `0.0`).
-Обходить поріг/LM-маржу, але НЕ veto, НЕ `best≠current` і **НЕ `min_switch_len`**.
+Обходить поріг/LM-маржу/`min_switch_len`, але НЕ veto і НЕ `best≠current`.
+
+- **⚠️ ГЕЙТ (б) — КОН'ЮНКЦІЯ `!current_is_dict` І частоти, НЕ заміна (критична
+  готча, precision-аудит!).** `current_is_dict` ОБОВ'ЯЗКОВИЙ: багато легітимних
+  2-літерних англ. токенів РІДКІСНІ в корпусі OpenSubtitles (freq < 1.0), тож САМ
+  частотний гейт їх НЕ блокував би → хибне перемикання `db`→`ви`, `bp`→`из`,
+  `lt`→`де`, `nt`→`те`, `ye`→`ну` (домен власника: database/Forex/less-than). Член
+  `en.fst` → `current_is_dict=true` → блок. Частота ДОДАТКОВО ловить часті слова
+  ПОЗА словником. **Спроба замінити dict-блок частотою (одна з ітерацій) дала
+  структурно-невидимі FP** — eval показував 100%, бо цих токенів не було в негативі.
+- **⚠️ Захист CONFIG-НЕЗАЛЕЖНИЙ — і в `standard_ok` теж.** Для короткого слова
+  (`len ≤ short_word_max_len`) `current_is_dict` блокує перемикання в ОБОХ шляхах
+  (`short_word_current_protected`). Інакше при `min_switch_len=2` (нижча чутливість)
+  `standard_ok` обходив би dict-блок гілки `short_word_switch` (`threshold(2)` скінченний)
+  і `db`→`ви` знову став би FP. Тепер захист не залежить від користувацького порога.
+- **RECALL сміттєвих двійників чиститься в ДАНИХ, НЕ послабленням гейта.** `nf`
+  (двійник `та`) був СМІТТЯМ у `en.words.txt` (OCR-шум, не англ. слово) → `current_is_dict`
+  хибно блокував `та`. Фікс: прибрано `nf` з корпусу + `JUNK_SHORT` у `clean_corpus.py`
+  + перегенеровано `en.fst` (зона `typofix-data`). Реальні абревіатури (`db`/`lt`/`ye`)
+  НЕ чіпали. Принцип: recall ↑ через чистоту даних, precision-гейт лишається суворим.
+- **НЕЗВІДНА неоднозначність (свідомий trade-off, доповіли власнику):** `yt`/`nb`/
+  `pf`/`ot`/`jn` НЕ в `en.fst`, а їхні uk-двійники `не`/`ти`/`за`/`ще`/`от` — ЧАСТІ →
+  ВОНИ ПЕРЕМИКАЮТЬСЯ. Ті самі клавіші = і токен (yt=YouTube), і часте укр. слово;
+  блокувати їх = вбити recall на `не`/`ти` (найчастіші укр.). Для укр-юзера switch —
+  кращий дефолт; власник може додати конкретний токен у `never_switch` veto.
+- **Пороги — регулятори precision/recall:** `short_word_freq_switch_min` (укр-сторона:
+  ВИЩЕ → менше recall), `short_word_current_freq_max` (en-сторона поза словником).
+  Калібровано на eval: **precision 100% (FP=0), recall 99.4%** (категорія
+  `short_en_abbrev` — db/bp/lt/nt/ye/ut/ps… — усі TN). Стереже: `tests/recall_short_service.rs`
+  (`frequent_short_uk_words_switch_without_whitelist`; `rare_english_abbreviations_in_dict_do_not_switch`
+  — db/bp/lt/nt/ye; `ta_switches_after_junk_twin_removed_from_corpus`) + юніти
+  `rare_en_dict_twin_blocks_short_switch_nu_ye`/`frequency_opens_short_switch_when_current_is_not_a_word`.
 
 - **⚠️ НИЖНЯ МЕЖА — ЛІТЕРАЛ `len >= 2`, НЕ `cfg.min_switch_len` (ДВА репро!).**
   Семантика — «не ОДИНОЧНИЙ токен», а НЕ «користувацький мінімум». Дзеркало від
@@ -213,31 +249,29 @@ recall на них без втрати precision, у `eval_branch` додано 
   - 1-літерні рядки в `uk.short.txt` лишаються лише як dict/LM-члени `uk.fst` (мертві
     для дзеркала через floor=2) — НЕ видаляв (зона `typofix-data`).
 
-- **ЧОМУ whitelist, а не повний словник (критично для precision):** `ат`,`ді`,`св`
-  Є у реальному `uk.fst` (шум корпусу), тож dict-hit сам не відрізнив би код-токени
-  `fn`→`ат`/`ls`→`ді` від службових `jn`→`от`. Whitelist (`uk.short.txt`) містить
-  `от`/`ти`/`чи`, але НЕ `ат`/`ді` → чисте розрізнення. **Не послабляй до
-  dict-only** — це поверне FP на `code`-токенах (перевірено: `fn`/`ls` ламались би).
-- **Двосторонньо:** `en.short.txt` (`we`,`is`,`to`...) як кандидат рятує
-  `цу`→`we`,`ші`→`is` (pos_uk_for_en); ті самі слова, набрані В EN
-  (`short_en_real`), НЕ перемикаються, бо `best==current` (двійник — справжнє en).
-- **Whitelist у core приходить ЧЕРЕЗ `ctx.rules`** (`WordRules.short_service`,
-  per-`LayoutId`), не через нове поле `LanguageProfile`/`Context` — свідомо, щоб
-  НЕ ламати літеральні конструктори в `src-tauri` (там `WordRules::new()`/`..base`
-  лишаються чинні). `typofix-data::eval::build_word_rules` вантажить файли;
-  **рантайм `src-tauri/runtime.rs` поки передає порожні `WordRules`** → фіча
-  активна в eval/тестах, у проді — після 1-рядкового wiring (follow-up оркестратора).
-- **Залишкові FN — свідомий precision-trade:** `db`/`ut`/`lt`/`ps`/`nt` (їхній en
-  двійник Є реальним en-словом → умова (б) хибна) і `гі`→`us` (`гі` — реальне укр.)
-  лишаються FN. Краще пропустити, ніж зіпсувати легітимний короткий ввід.
+- **ЧОМУ частота, а не голий dict-hit (критично для precision):** `ат`,`ді`,`св`
+  Є у реальному `uk.fst` (шум корпусу), тож dict-hit САМ не відрізнив би код-токени
+  `fn`→`ат`/`ls`→`ді` від частих `nf`→`та`. РАНІШЕ це розв'язував ручний whitelist;
+  ТЕПЕР — `short_word_freq_switch_min`: `ат`/`ді` мають freq≈0 (нижче `freq_floor`),
+  `та`/`що` — freq≥2 → чисте розрізнення БЕЗ ручного списку. **Не послабляй до
+  dict-only** (поверне FP на `fn`/`ls`) і **не прибирай гейт (б)** (поверне FP на
+  реальних англ. коротких типу `of`/`it`).
+- **Whitelist (`is_short_service`) лишається як OVERRIDE**, НЕ єдиний шлях:
+  жаргон/forex/рідкісні службові слова поза частотним покриттям (`зі`≈1.78<2.0 — у
+  whitelist). Приходить ЧЕРЕЗ `ctx.rules` (`WordRules.short_service`, per-`LayoutId`).
+  `build_word_rules`/`runtime.rs::load_word_rules` вантажать `uk.short.txt`.
+- **Залишкові FN — свідомий precision-trade:** `ut`→`ге` (`ге` freq≈0 + `ut` Є
+  реальним en → обидва гейти проти). Краще пропустити, ніж зіпсувати легітимний ввід.
 - **Калібрування (реальний eval, 383 прикл.):** precision **100%** (0 FP),
-  recall **98.8%**, F1 **99.4%** (`pos_short_uk_2` 92.3%, `pos_uk_for_en` 100%).
+  recall **99.4%**, F1 **99.7%** (`pos_short_uk_2` 96.2%, `pos_uk_for_en` 100%) —
+  симетричний частотний гейт підняв recall (раніше 98.8%), нуль нових FP.
   ⚠️ **Eval будує `Context` з `DetectorConfig::default()` (`min_switch_len=2`), тож
-  НЕ покриває рантаймовий сценарій min=3** (репро B) — його ловлять лише нові юніти
-  з `min_switch_len: 3`. Стереже: `mirror_*`/`mirror_does_not_switch_one_letter_service_word`/
+  НЕ покриває рантаймовий сценарій min=3** (репро B) — його ловлять лише юніти/
+  інтеграційні з `min_switch_len: 3`. Стереже: `mirror_*`/
   `mirror_switches_two_letter_service_word_with_runtime_min_len_3`/`lone_comma_*`
-  (герметичні) + `tests/recall_short_service.rs`
-  (`one_letter_tokens_never_switch`/`que_and_to_switch_with_runtime_min_len_3`).
+  (герметичні) + `tests/recall_short_service.rs` (`que_and_to_switch_with_runtime_min_len_3`/
+  `frequent_short_uk_words_switch_without_whitelist`/`short_english_words_never_switch_data_driven`/
+  `short_code_tokens_do_not_switch_data_driven`).
 - **❌ ХИБНА гіпотеза (спростовано аудитом — НЕ повертати):** раніше тут стояла
   готча, ніби `що`/`то` не перемикаються через брак записів у `uk.short.txt`/
   `samples/uk.words.txt`, а `то` нібито «працює живцем». Це БУЛО НЕВІРНО: справжній
@@ -346,10 +380,10 @@ recall на них без втрати precision, у `eval_branch` додано 
 ## Секретні (пароль) поля — заслінка `Context.secure` (приватність №4!)
 
 **Неочевидне.** `Context` несе `pub secure: bool` (постачає платформа через
-`Platform::is_secure_field`). ⚠️ **Платформа Windows зараз постачає завжди `false`**
-(детекцію тимчасово ВИМКНЕНО — UIA лагала IDE; деталі/план — у
-`crates/typofix-platform-windows/CLAUDE.md`). Плумбінг і ця логіка ядра лишаються
-ЯК Є (поведінка = secure ніколи не тригериться); тести/eval не зачеплені. За `secure==true` `engine::step` ПЕРШИМ ділом —
+`Platform::is_secure_field`). ⚠️ **Платформа Windows детектує ЛИШЕ нативні поля**
+(`ES_PASSWORD`/passwordchar; UIA прибрано — лагав IDE). Тобто `secure=true` приходить
+для нативних Win32 пароль-полів (логіни/UAC/інсталятори), але НЕ для веб/Electron.
+Ця логіка ядра незмінна; деталі/межі — `crates/typofix-platform-windows/CLAUDE.md`. За `secure==true` `engine::step` ПЕРШИМ ділом —
 ще до rejection-сигналу/виключень/detector — робить ПОВНИЙ bypass: НЕ буферить,
 НЕ перемикає, повертає `Vec::new()`. **На відміну від `is_window_excluded`, ще й
 СКИДАЄ буфер вікна** (`invalidate_window`) і гасить `pending_retype` — у пам'яті

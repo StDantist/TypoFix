@@ -102,6 +102,14 @@ def clean_sentences(path, letters):
     return out_lines, kept_lines, tokens_out
 
 
+# Сміттєві КОРОТКІ токени (OCR/токенізаційний шум, НЕ реальні слова), що потрапили
+# в корпус і ХИБНО блокують перемикання частих двійників іншою мовою: напр. en `nf`
+# був членом en.fst → `current_is_dict` блокував укр. `та` (nf→та). Прибираємо ЛИШЕ
+# ЯВНЕ сміття — реальні абревіатури (`db`/`bp`/`lt`/`nt`/`ye`) НЕ чіпаємо (вони мають
+# лишатися у словнику як precision-захист). Деталі: crates/typofix-core/CLAUDE.md.
+JUNK_SHORT = {"nf"}
+
+
 def clean_words(path, letters, short_whitelist):
     words = []
     with open(path, encoding="utf-8") as f:
@@ -117,6 +125,8 @@ def clean_words(path, letters, short_whitelist):
             if count < MIN_COUNT:
                 continue
             ct = clean_token(word, letters)
+            if ct in JUNK_SHORT:
+                continue
             # 1-літерні пускаємо ЛИШЕ з whitelist (інакше OCR-шум/латиниця).
             if ct and (len(ct) >= 2 or ct in short_whitelist):
                 words.append(ct)

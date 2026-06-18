@@ -47,10 +47,14 @@ recall — за сумніву НЕ перемикати.**
   блокує клавіші-пунктуацію (див. нижче). Стереже: `single_letter_*` (юніти) +
   `single_letter_uk_words_switch` (реальні моделі) + eval `pos_short_uk_1` (9/9).
 - **2-літерні службові/часті укр. слова (`short_word_switch`):** DATA-DRIVEN —
-  перемикаються, якщо укр-двійник Є у словнику І його частота ≥ `freq_floor`-порога
-  (`та`≈2.83/`що`≈4.79/`то`/`як`/`чи`/`бо`/`ні`…) **АБО** він у whitelist override
-  (`uk.short.txt`, напр. `зі`≈1.78<поріг). Приклади: `oj`→`що`, `nj`→`то`,
-  `nf`→`та`. Стереже: `mirror_*`/`frequent_short_uk_words_switch_without_whitelist`.
+  перемикаються, якщо укр-двійник Є у словнику І його `best_score.freq >=
+  short_word_freq_switch_min` (=2.0) (`та`≈2.83/`що`≈4.79/`то`/`як`/`чи`/`бо`/`ні`…)
+  **АБО** він у whitelist override (`uk.short.txt`, напр. `зі`≈1.78<2.0). Приклади:
+  `oj`→`що`, `nj`→`то`, `nf`→`та`. Стереже:
+  `mirror_*`/`frequent_short_uk_words_switch_without_whitelist`.
+
+**Канонічні eval-числа (headline; інші секції посилаються сюди):** реальний
+корпус, 383 прикл. → **precision 100% (FP=0), recall 99.4%, F1 99.7%**.
 
 ### Реєстр: ЩО НЕ ПЕРЕМИКАЄТЬСЯ
 
@@ -113,9 +117,9 @@ recall — за сумніву НЕ перемикати.**
   валідне укр. **Запас precision:** найгірший негатив на eval — `vec`→uk conf≈1.15,
   а `thr(3)=2.33` тримає його з відривом ≈1.2; FP-обрив настає лише при
   `base_threshold=0`. Тримати `short_word_extra ≥ ~4` і `base_threshold ≥ 0.5` —
-  межа, де precision на eval лишається 100%. Eval = 295 СИНТЕТИЧНИХ прикладів →
-  реальні негативи (код/абревіатури) можуть відрізнятись, тому свідомо консервативно
-  (запас > recall). Числа: precision **100%**, recall 93.6%→**95.2%**, F1→97.5%.
+  межа, де precision на eval лишається 100% (числа — див. headline вище). Eval
+  синтетичний → реальні негативи (код/абревіатури) можуть відрізнятись, тому свідомо
+  консервативно (запас > recall).
   Інваріант стереже `calibrated_short_word_threshold_holds_recall_margin` (hermetic)
   + `tests/recall_plausible_nonword.rs` (реальні моделі: `rjk`→`кол` TP, негативи NO).
 
@@ -154,11 +158,11 @@ recall — за сумніву НЕ перемикати.**
   `typofix_data::load_freq_map_file` → `FrequencyMap::from_fst_map` у
   `eval::build_profiles` і `runtime.rs` (м'яка деградація: нема файлу → `None` →
   лише baseline). **typofix-data НЕ редагувалась** (лише споживання її API).
-- **Калібрування (реальний eval, 383 прикл.):** precision **100%→100%** (0 FP),
-  recall **95.5%→98.9%**, F1 97.7%→**99.4%**; FN 8→2 (резерв `ut`→`ге`/`ps`→`зі`
-  — рідкісні укр., нижче floor; свідомо консервативно, бо precision > recall).
-  Стереже: юніти `freq_*`/`no_freq_layer_*` (герметичні) + `tests/recall_freq_weighted.rs`
-  (реальні моделі: `ну`→`ye` TP, `us`/`is`/`to`/`we` precision-гард) + юніти `freq.rs`.
+- **Калібрування:** частотний шар підняв recall (FN 8→2; резерв `ut`→`ге`/`ps`→`зі`
+  — рідкісні укр., нижче floor; свідомо консервативно, бо precision > recall). Числа
+  — див. headline. Стереже: юніти `freq_*`/`no_freq_layer_*` (герметичні) +
+  `tests/recall_freq_weighted.rs` (реальні моделі: `ну`→`ye` TP, `us`/`is`/`to`/`we`
+  precision-гард) + юніти `freq.rs`.
 
 ## Особистий словник (`user.txt`) = ПОЗИТИВНИЙ сигнал, НЕ veto (готча — семантика!)
 
@@ -175,9 +179,12 @@ recall — за сумніву НЕ перемикати.**
   (`log_prob → None` → надбавка 0) → рівно baseline.
 - **`best_is_dict` теж включає recognized** — інакше precision-замок гілки-літери
   (`use_letter`) відкидав би `вжух` (кінцеве `х`=`[` → дизамбігуація пунктуації).
-- **Проводка:** `runtime.rs::load_word_rules` + `eval::build_word_rules` вантажать
-  `data/dicts/user.txt` через `typofix_data::load_user_words` (м'яка деградація:
-  нема/порожній → нічого). Шаблон у git порожній (нуль впливу на eval).
+- **Проводка (КАНОНІЧНА для ВСІХ rules-даних):** `runtime.rs::load_word_rules` +
+  `eval::build_word_rules` вантажать файли з `data/dicts/` через `typofix_data::load_*`
+  (`user.txt`/`uk.short.txt`/`iso4217.txt`/`extensions.txt`); **м'яка деградація:**
+  нема файлу → вбудований fallback Bruno або порожньо. **typofix-data НЕ
+  редагувалась** (лише споживання API). Тут: `user.txt`→`load_user_words` (шаблон у
+  git порожній → нуль впливу на eval).
 - **Звірити з Bruno (follow-up, не блокер):** `data/CLAUDE.md` досі описує `user.txt`
   veto-формулюванням — оркестратор узгодить опис із цією позитивною семантикою.
 - Стереже: юніт `user_word_switches_via_personal_dictionary` (+ контроль причинності
@@ -199,8 +206,7 @@ recall — за сумніву НЕ перемикати.**
 - **PRECISION:** обидві половини мусять бути ISO (`ABCDEF`/`EURXXX` → ні) — на eval
   нуль FP навіть із повним ISO-переліком. **Коректно набрану латиницею пару НЕ
   ламаємо:** фільтр `p.id != current_layout` → `best==current` → не перемикаємо.
-- **Проводка:** `load_word_rules`/`build_word_rules` вантажать `data/dicts/iso4217.txt`
-  через `typofix_data::load_iso4217` (нема файлу → вбудований перелік Bruno).
+- **Проводка:** `iso4217.txt`→`load_iso4217` (див. канонічну проводку вище).
 - Стереже: юніти `forex_*` (герметичні) + `currency_pair_requires_both_halves_iso`
   (`rules.rs`) + `tests/recall_user_forex.rs` (реальні: обидва напрями пари).
 
@@ -230,119 +236,70 @@ recall — за сумніву НЕ перемикати.**
 - **Спільне з forex:** обидва скануют кандидатів `p.id != current_layout`,
   перевизначають `best`/`best_text`/`best_score` і виставляють `*_forced`. Порядок:
   forex → extension (за `!forex_forced`) → phonotactic (за `!forex && !extension`).
-- **Проводка:** `runtime.rs::load_word_rules` + `eval::build_word_rules` вантажать
-  `iso4217.txt`/`extensions.txt` через `typofix_data::load_*` (нема файлу → вбудований
-  fallback Bruno). **typofix-data НЕ редагувалась** (лише споживання).
-- **Eval:** precision **100%→100%**, recall 98.9% (датасет не має ь-/розширення-
-  позитивів — сигнали покривають кейси поза синтетикою). Стереже: юніти
+- **Проводка:** `extensions.txt`→`load_extensions` (див. канонічну проводку вище).
+- **Eval:** датасет не має ь-/розширення-позитивів (сигнали покривають кейси поза
+  синтетикою) → числа не змінює; див. headline. Стереже: юніти
   `phonotactic_*`/`extension_*`/`known_extension_*` (герметичні) +
   `tests/recall_phonotactic_ext.rs` (реальні: `mb`→`ьи`, `txt`/`pdf`/`json`/`html`,
   ризикові `doc`/`log`/`go` в EN не ламаються).
 
-## DATA-DRIVEN коротко-словне перемикання (`short_word_switch`) (готча!)
+## DATA-DRIVEN коротко-словне перемикання (`short_word_switch`) — ГОТЧІ
 
-**Неочевидне:** короткі слова (len 2..=`short_word_max_len`) НЕ пробивають
-звичайний короткий поріг (`threshold(2)` суворий; при рантаймовому `min_switch_len=3`
-`standard_ok` для len=2 взагалі мертвий). Раніше їх рятував ЛИШЕ ручний whitelist
-(`uk.short.txt`) — гра в кота-мишки (власник додавав слова по одному). **Тепер
-покриття частих слів — DATA-DRIVEN із частотного словника**, whitelist лише override.
+Базова поведінка (ЩО перемикається) — у реєстрі вище; тут лише неочевидні готчі.
+`short_word_switch` (колишній `mirror_ok`, `eval_branch`) обходить
+поріг/LM-маржу/`min_switch_len`, але НЕ veto і НЕ `best≠current`. Раніше рятував
+ЛИШЕ ручний whitelist (гра в кота-мишки); тепер покриття — DATA-DRIVEN із частот.
 
-У `eval_branch` `short_word_switch` (колишній `mirror_ok`) перемикає коротке, ЯКЩО:
-- **(а) укр-кандидат РЕАЛЬНЕ ЧАСТЕ слово:** `best_is_dict` І
-  `best_score.freq >= short_word_freq_switch_min` (дефолт `2.0`) **АБО** whitelist
-  override `is_short_service`. Частота (`CandidateScore.freq` = `max(0, lp−freq_floor)`)
-  — головний фільтр: `та`≈2.83/`що`≈4.79/`то`≈3.15/`як`≈3.72/`чи`≈2.49/`бо`≈2.0/
-  `ні`≈3.47 проходять АВТОМАТИЧНО, а словниковий ШУМ корпусу `ат`/`ді`/`св`/`ге`≈0.0
-  (нижче `freq_floor=−9`) — НІ. І
-- **(б) поточний (en) текст НЕ справжнє часте слово:** `!current_is_dict &&
-  current_score.freq < short_word_current_freq_max` (дефолт `1.0`) І
-  `current_score.lm < short_word_twin_lm_max` (дефолт `0.0`).
-Обходить поріг/LM-маржу/`min_switch_len`, але НЕ veto і НЕ `best≠current`.
-
-- **⚠️ ГЕЙТ (б) — КОН'ЮНКЦІЯ `!current_is_dict` І частоти, НЕ заміна (критична
-  готча, precision-аудит!).** `current_is_dict` ОБОВ'ЯЗКОВИЙ: багато легітимних
-  2-літерних англ. токенів РІДКІСНІ в корпусі OpenSubtitles (freq < 1.0), тож САМ
-  частотний гейт їх НЕ блокував би → хибне перемикання `db`→`ви`, `bp`→`из`,
-  `lt`→`де`, `nt`→`те`, `ye`→`ну` (домен власника: database/Forex/less-than). Член
-  `en.fst` → `current_is_dict=true` → блок. Частота ДОДАТКОВО ловить часті слова
-  ПОЗА словником. **Спроба замінити dict-блок частотою (одна з ітерацій) дала
-  структурно-невидимі FP** — eval показував 100%, бо цих токенів не було в негативі.
-- **⚠️ Захист CONFIG-НЕЗАЛЕЖНИЙ — і в `standard_ok` теж.** Для короткого слова
-  (`len ≤ short_word_max_len`) `current_is_dict` блокує перемикання в ОБОХ шляхах
-  (`short_word_current_protected`). Інакше при `min_switch_len=2` (нижча чутливість)
-  `standard_ok` обходив би dict-блок гілки `short_word_switch` (`threshold(2)` скінченний)
-  і `db`→`ви` знову став би FP. Тепер захист не залежить від користувацького порога.
-- **RECALL сміттєвих двійників чиститься в ДАНИХ, НЕ послабленням гейта.** `nf`
-  (двійник `та`) був СМІТТЯМ у `en.words.txt` (OCR-шум, не англ. слово) → `current_is_dict`
-  хибно блокував `та`. Фікс: прибрано `nf` з корпусу + `JUNK_SHORT` у `clean_corpus.py`
-  + перегенеровано `en.fst` (зона `typofix-data`). Реальні абревіатури (`db`/`lt`/`ye`)
-  НЕ чіпали. Принцип: recall ↑ через чистоту даних, precision-гейт лишається суворим.
+- **⚠️ ГЕЙТ на ПОТОЧНИЙ (en) текст — КОН'ЮНКЦІЯ `!current_is_dict` І частоти
+  (`current_score.freq < short_word_current_freq_max`, дефолт 1.0), НЕ заміна
+  (критична готча, precision-аудит!).** `!current_is_dict` ОБОВ'ЯЗКОВИЙ: багато
+  легітимних 2-літерних англ. РІДКІСНІ в OpenSubtitles (freq < 1.0), тож САМ
+  частотний гейт їх НЕ блокував би → `db`→`ви`, `bp`→`из`, `lt`→`де`, `nt`→`те`,
+  `ye`→`ну` (домен власника). Член `en.fst` → `current_is_dict=true` → блок; частота
+  ЛОВИТЬ часті слова ПОЗА словником. **Спроба замінити dict-блок частотою дала
+  структурно-невидимі FP** — eval показував 100%, бо db/lt/nt не було в негативі датасету.
+- **⚠️ Захист CONFIG-НЕЗАЛЕЖНИЙ — і в `standard_ok` теж** (`short_word_current_protected`).
+  Для короткого (`len ≤ short_word_max_len`) `current_is_dict` блокує в ОБОХ шляхах.
+  Інакше при `min_switch_len=2` `standard_ok` (де `threshold(2)` скінченний) обходив би
+  dict-блок гілки `short_word_switch` і `db`→`ви` знову став би FP.
+- **Сміттєві двійники чистяться в ДАНИХ, НЕ послабленням гейта.** `nf` (двійник `та`)
+  був OCR-шумом у `en.words.txt` → `current_is_dict` хибно блокував `та`. Фікс:
+  `JUNK_SHORT` у `clean_corpus.py` + перегенеровано `en.fst`. Реальні абревіатури
+  (`db`/`lt`/`ye`) лишилися. Стереже `ta_switches_after_junk_twin_removed_from_corpus`.
+- **ЧОМУ частота, а не голий dict-hit:** `ат`/`ді`/`св` Є у `uk.fst` (шум корпусу) —
+  dict-hit САМ не відрізнив би `fn`→`ат`/`ls`→`ді` від частих `nf`→`та`.
+  `short_word_freq_switch_min`: `ат`/`ді` freq≈0 (< floor), `та`/`що` freq≥2 → чисте
+  розрізнення. **Не послабляй до dict-only** (FP на `fn`/`ls`) і **не прибирай
+  en-гейт** (FP на реальних англ. `of`/`it`).
 - **НЕЗВІДНА неоднозначність (свідомий trade-off, доповіли власнику):** `yt`/`nb`/
   `pf`/`ot`/`jn` НЕ в `en.fst`, а їхні uk-двійники `не`/`ти`/`за`/`ще`/`от` — ЧАСТІ →
-  ВОНИ ПЕРЕМИКАЮТЬСЯ. Ті самі клавіші = і токен (yt=YouTube), і часте укр. слово;
-  блокувати їх = вбити recall на `не`/`ти` (найчастіші укр.). Для укр-юзера switch —
-  кращий дефолт; власник може додати конкретний токен у `never_switch` veto.
-- **Пороги — регулятори precision/recall:** `short_word_freq_switch_min` (укр-сторона:
-  ВИЩЕ → менше recall), `short_word_current_freq_max` (en-сторона поза словником).
-  Калібровано на eval: **precision 100% (FP=0), recall 99.4%** (категорія
-  `short_en_abbrev` — db/bp/lt/nt/ye/ut/ps… — усі TN). Стереже: `tests/recall_short_service.rs`
-  (`frequent_short_uk_words_switch_without_whitelist`; `rare_english_abbreviations_in_dict_do_not_switch`
-  — db/bp/lt/nt/ye; `ta_switches_after_junk_twin_removed_from_corpus`) + юніти
-  `rare_en_dict_twin_blocks_short_switch_nu_ye`/`frequency_opens_short_switch_when_current_is_not_a_word`.
+  ВОНИ ПЕРЕМИКАЮТЬСЯ (ті самі клавіші = і токен yt=YouTube, і часте укр. слово;
+  блокувати = вбити recall на найчастіших укр.). Власник може додати токен у `never_switch`.
+- **Whitelist (`is_short_service`) — OVERRIDE, НЕ єдиний шлях:** рідкісні службові поза
+  частотним покриттям (`зі`≈1.78<2.0). Залишкові FN — свідомий precision-trade:
+  `ut`→`ге` (`ге` freq≈0 + `ut` Є реальним en → обидва гейти проти).
 
-- **⚠️ НИЖНЯ МЕЖА — ЛІТЕРАЛ `len >= 2`, НЕ `cfg.min_switch_len` (ДВА репро!).**
-  Семантика — «не ОДИНОЧНИЙ токен», а НЕ «користувацький мінімум». Дзеркало від
-  початку задумане ОБХОДИТИ `min_switch_len` для коротких службових слів (саме в
-  цьому його суть), тож в'язати межу до `cfg.min_switch_len` — концептуальна помилка.
-  - **Репро A (precision, кома):** клавіша `,`(0x33) у EN — пунктуація, у UK — літера
-    «б». Без межі самотня кома форсилась на «б». **ОНОВЛЕНО:** тепер кому блокує НЕ
-    «floor 2» (одиночні відкрито для whitelist), а (1) відсутність «б» у курованому
-    1-літерному whitelist і (2) гейт `is_word_char(джерело)==false` для пунктуації.
-    Однолітерні укр. СЛОВА `у/а/в/з/і/о/є/я/с` (джерела — ЛІТЕРИ, не пунктуація)
-    ПЕРЕМИКАЮТЬСЯ через `single_letter_service`. Див. «ПОЛІТИКА ПЕРЕМИКАННЯ».
+- **⚠️ НИЖНЯ МЕЖА 2-літерної гілки — ЛІТЕРАЛ `len >= 2`, НЕ `cfg.min_switch_len`
+  (ДВА репро!).** Семантика — «не ОДИНОЧНИЙ токен», а НЕ «користувацький мінімум».
+  Гілка від початку задумана ОБХОДИТИ `min_switch_len`, тож в'язати межу до нього —
+  концептуальна помилка. (len==1 — окрема гілка `single_letter_service`, див. реєстр.)
+  - **Репро A (precision, кома):** `,`(0x33) у EN — пунктуація, у UK — «б». Кому
+    блокує відсутність «б» у whitelist + `is_word_char(',')==false`; однолітерні укр.
+    слова `у/а/в/з/і/о/є/я/с` (джерела — ЛІТЕРИ) перемикаються. Див. реєстр.
   - **Репро B (recall, `то`/`що` не перемикалися ЖИВЦЕМ):** `src-tauri` дефолтить
-    `min_word_len=3` → `min_switch_len=3`. Поки межа була `cfg.min_switch_len`, умова
-    `2 >= 3` коротко-замикала ВСІ 2-літерні (і `то`, і `що`) — стандартний шлях для
-    len=2 теж мертвий (`threshold(2)=INF` + `standard_ok` гейтить `len>=min_switch_len`).
-    **ЖОДЕН тест не ловив цього**, бо всі будують `Context` із `DetectorConfig::default()`
-    (=2). Літерал `2` відновлює 2-літерні НЕЗАЛЕЖНО від користувацького порога.
-    Стереже: `mirror_switches_two_letter_service_word_with_runtime_min_len_3` +
-    `lone_comma_blocked_even_with_runtime_min_len_3` (юніти, cfg.min_switch_len=3) +
+    `min_word_len=3` → `min_switch_len=3`. Поки межа була `cfg.min_switch_len`, `2>=3`
+    коротко-замикала ВСІ 2-літерні (стандартний шлях для len=2 теж мертвий:
+    `threshold(2)=INF`). **ЖОДЕН тест не ловив**, бо всі будують `Context` з
+    `DetectorConfig::default()`(=2). Літерал `2` відновлює незалежно від порога. Стереже:
+    `mirror_switches_two_letter_service_word_with_runtime_min_len_3` +
+    `lone_comma_blocked_even_with_runtime_min_len_3` (юніти, min=3) +
     `tests/recall_short_service.rs::que_and_to_switch_with_runtime_min_len_3` (реальні).
-  - **ОНОВЛЕНО (ПОЛІТИКА ПЕРЕМИКАННЯ):** 1-літерні тепер мають ОКРЕМУ гілку
-    `single_letter_service` (куроваий whitelist `у/а/в/з/і/о/є/я/с` із 1-літерної
-    секції `uk.short.txt`) — вони ПЕРЕМИКАЮТЬСЯ. Літеральна межа `2` стосується лише
-    2-літерної гілки `short_word_switch`. Кома й решта одиночних поза whitelist
-    лишаються заблокованими (`is_word_char(джерело)` + відсутність у whitelist).
-
-- **ЧОМУ частота, а не голий dict-hit (критично для precision):** `ат`,`ді`,`св`
-  Є у реальному `uk.fst` (шум корпусу), тож dict-hit САМ не відрізнив би код-токени
-  `fn`→`ат`/`ls`→`ді` від частих `nf`→`та`. РАНІШЕ це розв'язував ручний whitelist;
-  ТЕПЕР — `short_word_freq_switch_min`: `ат`/`ді` мають freq≈0 (нижче `freq_floor`),
-  `та`/`що` — freq≥2 → чисте розрізнення БЕЗ ручного списку. **Не послабляй до
-  dict-only** (поверне FP на `fn`/`ls`) і **не прибирай гейт (б)** (поверне FP на
-  реальних англ. коротких типу `of`/`it`).
-- **Whitelist (`is_short_service`) лишається як OVERRIDE**, НЕ єдиний шлях:
-  жаргон/forex/рідкісні службові слова поза частотним покриттям (`зі`≈1.78<2.0 — у
-  whitelist). Приходить ЧЕРЕЗ `ctx.rules` (`WordRules.short_service`, per-`LayoutId`).
-  `build_word_rules`/`runtime.rs::load_word_rules` вантажать `uk.short.txt`.
-- **Залишкові FN — свідомий precision-trade:** `ut`→`ге` (`ге` freq≈0 + `ut` Є
-  реальним en → обидва гейти проти). Краще пропустити, ніж зіпсувати легітимний ввід.
-- **Калібрування (реальний eval, 383 прикл.):** precision **100%** (0 FP),
-  recall **99.4%**, F1 **99.7%** (`pos_short_uk_2` 96.2%, `pos_uk_for_en` 100%) —
-  симетричний частотний гейт підняв recall (раніше 98.8%), нуль нових FP.
-  ⚠️ **Eval будує `Context` з `DetectorConfig::default()` (`min_switch_len=2`), тож
-  НЕ покриває рантаймовий сценарій min=3** (репро B) — його ловлять лише юніти/
-  інтеграційні з `min_switch_len: 3`. Стереже: `mirror_*`/
-  `mirror_switches_two_letter_service_word_with_runtime_min_len_3`/`lone_comma_*`
-  (герметичні) + `tests/recall_short_service.rs` (`que_and_to_switch_with_runtime_min_len_3`/
-  `frequent_short_uk_words_switch_without_whitelist`/`short_english_words_never_switch_data_driven`/
-  `short_code_tokens_do_not_switch_data_driven`).
-- **❌ ХИБНА гіпотеза (спростовано аудитом — НЕ повертати):** раніше тут стояла
-  готча, ніби `що`/`то` не перемикаються через брак записів у `uk.short.txt`/
-  `samples/uk.words.txt`, а `то` нібито «працює живцем». Це БУЛО НЕВІРНО: справжній
-  корінь — межа дзеркала, прив'язана до рантаймового `min_switch_len=3` (див. репро
-  B вище), що вбивало ОБИДВА слова. Дані додавати НЕ треба; фікс — у логіці (floor=2).
+- **⚠️ Eval будує `Context` з `default()` (`min_switch_len=2`) → НЕ покриває рантаймовий
+  min=3** (репро B); його ловлять лише юніти/інтеграційні з `min_switch_len: 3`. Числа —
+  див. headline. Решта покриття: `tests/recall_short_service.rs`
+  (`frequent_short_uk_words_switch_without_whitelist`/`rare_english_abbreviations_in_dict_do_not_switch`/
+  `short_english_words_never_switch_data_driven`/`short_code_tokens_do_not_switch_data_driven`) +
+  юніти `rare_en_dict_twin_blocks_short_switch_nu_ye`/`frequency_opens_short_switch_when_current_is_not_a_word`.
 
 ## Пунктуація-що-є-літерою-в-розкладці + дизамбігуація на межі (готча!)
 
@@ -462,10 +419,10 @@ recall — за сумніву НЕ перемикати.**
   тестах/eval/`detector`); свідомо прийнято.
 - **`secure=true` → стан ядра лишається порожнім** (буфер не накопичено) — стереже
   `tests/secure_field.rs` (`EngineState::default()==state`); контроль причинності:
-  те саме слово при `secure=false` перемикається. Платформна детекція (нативний
-  `ES_PASSWORD`/`EM_GETPASSWORDCHAR` + UIA `IsPassword` для веб/Electron/WPF, кеш на
-  зміні фокуса) і її МЕЖІ (WinRAR v7 не виставляє семантику пароля ніде — недосяжний
-  стандартними API) — `crates/typofix-platform-windows/CLAUDE.md`.
+  те саме слово при `secure=false` перемикається. Платформна детекція —
+  **native-only** (нативний `ES_PASSWORD`/`EM_GETPASSWORDCHAR`, кеш на зміні фокуса;
+  **UIA прибрано — лагало IDE**, комміт 6a445b1). Тому веб/Electron/WPF пароль-поля
+  поки **НЕ покрито**. Деталі/межі — `crates/typofix-platform-windows/CLAUDE.md`.
 
 ## Готчі правил/виключень (Фаза 4)
 
@@ -603,10 +560,9 @@ CaseMode) -> String` (`case.rs`, `CaseMode{Upper,Lower,Sentence}`).
   варіант мусить бути РЕАЛЬНИМ словом (`current.dict.contains`, регістронезалежний).
   `iOS`→`Ios` не в словнику → не чіпаємо. Як і `overheld_shift_fix` — dict-only, без
   LM (LM-гейт ризикував би precision). Veto також блокує (як для overheld).
-- ⚠️ **Eval СЛІПИЙ до caps** (метрика `switch && best==intended_layout`, а caps лишає
-  `best==current_layout`): CapsLock-правило не дає TP/FP/FN. **Eval незмінний:
-  precision 100%, recall 98.9%, F1 99.4%, FP=0** (з прапорцями й без). Покриття —
-  герметичні юніти: `capslock_fix_*` (позитиви `пРИВІТ`/`hELLO`, негативи
+- ⚠️ **Eval сліпий до caps** (як у секції «Корекція РЕГІСТРУ» вище — caps лишає
+  `best==current_layout` → нуль TP/FP/FN, числа незмінні). Покриття — герметичні
+  юніти: `capslock_fix_*` (позитиви `пРИВІТ`/`hELLO`, негативи
   `USD`/`EUR`/`API`/`iPhone`/`iOS`/non-word/одно-літерне) + `*_disabled_flag_*` /
   `case_fix_and_capslock_flags_are_independent` / `forex_disabled_flag_no_switch`.
 - **Сумісність збірки:** `DetectorConfig` має `impl Default`; усі ВНУТРІШНІ

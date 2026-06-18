@@ -7,6 +7,9 @@
 //! Це герметична альтернатива WinRAR: WinRAR v7 ховає пароль у `ComboBox` без
 //! `ES_PASSWORD` (детекція його не ловить — див. `CLAUDE.md`), тож для перевірки
 //! САМОГО механізму потрібне гарантовано-нативне `ES_PASSWORD`-поле.
+//!
+//! ⚠️ Перевіряє ЛИШЕ нативний шлях (`foreground_focus_is_secure`); UIA з рантайму
+//! прибрано назавжди (вмикав a11y-дерево цільової апки → лаг).
 
 #[cfg(windows)]
 fn main() {
@@ -17,7 +20,7 @@ fn main() {
 mod win {
     use std::time::Duration;
 
-    use typofix_platform_windows::{debug_uia_focus_is_password, foreground_focus_is_secure};
+    use typofix_platform_windows::foreground_focus_is_secure;
     use windows_sys::core::w;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -73,47 +76,30 @@ mod win {
                 return 1;
             }
 
-            // (1) Фокус на полі ПАРОЛЯ → нативна перевірка TRUE; UIA теж TRUE
-            //     (UIA виводить IsPassword зі стилю ES_PASSWORD) — доказ плумбінгу
-            //     UIA (COM-ініт + ручні vtable + VARIANT) на детермінованому полі.
+            // (1) Фокус на полі ПАРОЛЯ → нативна перевірка TRUE (ES_PASSWORD у стилі).
             ShowWindow(pw, SW_SHOW);
             force_fg(pw);
             SetFocus(pw);
             pump(Duration::from_millis(300));
             let secure_pw = foreground_focus_is_secure();
-            let uia_pw = debug_uia_focus_is_password();
-            println!(
-                "[ES_PASSWORD edit] native={} UIA={}",
-                up(secure_pw),
-                up(uia_pw)
-            );
+            println!("[ES_PASSWORD edit] native={}", up(secure_pw));
 
-            // (2) Фокус на ЗВИЧАЙНОМУ полі → обидва false.
+            // (2) Фокус на ЗВИЧАЙНОМУ полі → false.
             ShowWindow(plain, SW_SHOW);
             force_fg(plain);
             SetFocus(plain);
             pump(Duration::from_millis(300));
             let secure_plain = foreground_focus_is_secure();
-            let uia_plain = debug_uia_focus_is_password();
-            println!(
-                "[звичайний edit]   native={} UIA={}",
-                up(secure_plain),
-                up(uia_plain)
-            );
+            println!("[звичайний edit]   native={}", up(secure_plain));
 
             DestroyWindow(pw);
             DestroyWindow(plain);
 
-            if secure_pw && !secure_plain && uia_pw && !uia_plain {
-                println!(
-                    "\n✅ Коректно: ES_PASSWORD→секретне обома шляхами (native+UIA), звичайне→ні."
-                );
+            if secure_pw && !secure_plain {
+                println!("\n✅ Коректно: ES_PASSWORD→секретне (native), звичайне→ні.");
                 0
             } else {
-                eprintln!(
-                    "\n❌ Несподівано: native(pw={secure_pw},plain={secure_plain}) \
-                     UIA(pw={uia_pw},plain={uia_plain})"
-                );
+                eprintln!("\n❌ Несподівано: native(pw={secure_pw},plain={secure_plain})");
                 1
             }
         }

@@ -9,11 +9,10 @@
 //! pump, а зупиняється через `WM_QUIT` (`PostThreadMessage` із [`HookHandle`]).
 //!
 //! ## 🔴 Що тут НЕ робиться (інваріант стабільності)
-//! Детекція секретних полів (UIA/`SendMessageTimeoutW`/`EVENT_OBJECT_FOCUS`) тут НЕ
-//! живе — вона повільна (UIA вмикає a11y-дерево цільової IDE) і лагала ввід.
-//! Наразі цю машинерію **вимкнено цілком** (`is_secure_field` → `false`); тут
-//! лишається лише дешевий `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange`. Деталі
-//! й план редизайну — `CLAUDE.md` §«ДЕТЕКЦІЯ СЕКРЕТНИХ ПОЛІВ ВИМКНЕНА».
+//! Детекція секретних полів тут НЕ живе — вона на ОКРЕМОМУ потоці
+//! ([`crate::secure_thread`]), щоб LL-pump лишався дешевим. (UIA з неї прибрано
+//! назавжди — вмикав a11y цільової IDE й лагав; лишилась лише дешева нативна
+//! перевірка.) Тут — лише `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange`.
 //!
 //! ## Цикл проти власного вводу (критично)
 //! Хук бачить і фізичний ввід, і НАШ `SendInput`. Власні події позначені
@@ -135,7 +134,7 @@ fn hook_thread_main(sender: Sender<InputEvent>, tid_out: Arc<AtomicU32>) {
         let kb_hook: HHOOK = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0);
         let mouse_hook: HHOOK = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0);
         // Зміна вікна на передньому плані — лише для емісії `FocusChange` (дешево).
-        // Детекцію секретності тут НЕ робимо (її вимкнено цілком — див. модульний док).
+        // Детекцію секретності тут НЕ робимо: вона на `crate::secure_thread`.
         let fg_hook: HWINEVENTHOOK = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
@@ -275,7 +274,7 @@ unsafe extern "system" fn winevent_proc(
 ) {
     // Зміна вікна на передньому плані: інвалідуємо буфер (FocusChange). Дешево —
     // лише `window_info_for_hwnd` + надсилання в канал; жодного UIA/COM тут (див.
-    // модульний док). Детекцію секретності вимкнено.
+    // модульний док). Детекція секретності — на `crate::secure_thread`.
     if event == EVENT_SYSTEM_FOREGROUND {
         let info = window_info_for_hwnd(hwnd);
         HOOK_STATE.with(|s| {

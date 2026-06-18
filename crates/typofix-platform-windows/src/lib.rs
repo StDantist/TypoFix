@@ -22,17 +22,11 @@ mod hook;
 mod inject;
 #[cfg(windows)]
 mod layout;
-// 🔴 ВИМКНЕНО до безпечного редизайну (див. CLAUDE.md §«Секретні поля»): сам
-// ВИКЛИК UIA (`GetFocusedElement`/property) вмикає accessibility-дерево в
-// IDE/Electron/Chromium і гальмує цільовий застосунок — лаг лишався навіть із
-// перерахунком на окремому потоці. Машинерія НЕ задіяна (`WindowsPlatform` її не
-// запускає, `is_secure_field` → завжди `false`); код лишено в дереві для майбутнього
-// редизайну. `#[allow(dead_code)]` — поки не задіяно (інакше ворота `-D warnings`).
+// Детекція секретних полів — ЛИШЕ нативна (`ES_PASSWORD`/passwordchar), БЕЗ UIA
+// (UIA вмикав a11y-дерево цільової IDE → лаг; назавжди прибрано — див. CLAUDE.md).
 #[cfg(windows)]
-#[allow(dead_code)]
 mod secure;
 #[cfg(windows)]
-#[allow(dead_code)]
 mod secure_thread;
 #[cfg(windows)]
 mod selection;
@@ -51,8 +45,6 @@ pub use layout::{
     MethodResult,
 };
 #[cfg(windows)]
-pub use secure::debug_uia_focus_is_password;
-#[cfg(windows)]
 pub use selection::get_selection_text;
 #[cfg(windows)]
 pub use window::{foreground_focus_is_secure, foreground_window_info};
@@ -67,6 +59,7 @@ mod windows_impl {
     use typofix_platform::{Action, InputEvent, LayoutId, Platform, WindowInfo};
 
     use crate::hook::HookHandle;
+    use crate::secure_thread::SecureHandle;
     use crate::{inject, layout, window};
 
     /// Жива реалізація [`Platform`] для Windows.
@@ -78,22 +71,32 @@ mod windows_impl {
         rx: Receiver<InputEvent>,
         /// Живий хук-потік; Drop зупиняє його коректно. Поле тримає його живим.
         _hook: HookHandle,
+        /// Виділений потік детекції секретних полів (WinEvent фокуса + ДЕШЕВА нативна
+        /// перевірка, БЕЗ UIA); Drop зупиняє його. Окремий від `_hook`, щоб LL-pump
+        /// лишався абсолютно дешевим.
+        _secure: SecureHandle,
     }
 
     impl WindowsPlatform {
         /// Встановити хуки й почати приймати події.
         ///
         /// ⚠️ Побічний ефект для всієї системи: ставить `WH_KEYBOARD_LL` /
-        /// `WH_MOUSE_LL` (потік `_hook`). Для автотестів використовуй чисті модулі
-        /// (`keystate`/`scancode`) або запити без хука (`layout`/`window`).
+        /// `WH_MOUSE_LL` (потік `_hook`) і WinEvent focus-хуки (потік `_secure`).
+        /// Для автотестів використовуй чисті модулі (`keystate`/`scancode`) або
+        /// запити без хука (`layout`/`window`).
         ///
-        /// 🔴 Детекцію секретних полів (`SecureHandle`/UIA) ВИМКНЕНО — НЕ запускаємо
-        /// потік `typofix-secure`, бо виклик UIA лагав цільові IDE/Electron (a11y-
-        /// дерево). Деталі й план редизайну — CLAUDE.md §«Секретні поля».
+        /// Детекція секретних полів — ЛИШЕ нативна (`ES_PASSWORD`/passwordchar), БЕЗ
+        /// UIA (a11y цільової апки не чіпаємо → без лагів). Деталі — CLAUDE.md.
         pub fn new() -> Self {
             let (tx, rx) = channel();
             let hook = HookHandle::start(tx);
-            Self { rx, _hook: hook }
+            // Нативна детекція секретних полів — на власному потоці (LL-pump дешевий).
+            let secure = SecureHandle::start();
+            Self {
+                rx,
+                _hook: hook,
+                _secure: secure,
+            }
         }
     }
 
@@ -134,13 +137,11 @@ mod windows_impl {
         }
 
         fn is_secure_field(&self) -> bool {
-            // 🔴 ВИМКНЕНО (тимчасово, до безпечного редизайну): завжди `false`.
-            // Машинерія детекції (UIA `IsPassword` + нативний ES_PASSWORD/
-            // passwordchar, кеш на зміні фокуса) лагала ввід — сам виклик UIA
-            // вмикає accessibility-дерево IDE/Electron. Плумбінг `Context.secure`
-            // у core/runtime лишається ЯК Є (просто завжди false) → нульовий
-            // оверхед і поведінка точно як до коміту 7be0124. Деталі — CLAUDE.md.
-            false
+            // Hot-path: лише читаємо кеш (атомік, без блокувань). Перерахунок —
+            // ДЕШЕВА нативна перевірка (ES_PASSWORD/passwordchar на edit-класи, БЕЗ
+            // UIA) на потоці `secure_thread` за зміною фокуса. Покриває нативні
+            // Win32 пароль-поля (логіни/UAC/інсталятори); веб/Electron — НЕ покрито.
+            crate::secure::cached_is_secure()
         }
     }
 }

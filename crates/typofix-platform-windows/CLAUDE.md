@@ -14,10 +14,10 @@
 - `hook.rs` — LL-хуки (клавіатура/миша) + `EVENT_SYSTEM_FOREGROUND` (лише емісія
   `FocusChange` для інвалідації буфера) + message-pump потік. 🔴 **Жодного UIA/COM/
   `SendMessageTimeoutW` тут.**
-- `secure.rs` / `secure_thread.rs` — 🔴 **ВИМКНЕНО** (мертвий код, `#[allow(dead_code)]`).
-  Колишня машинерія детекції пароль-полів (UIA + WinEvent focus-хук + окремий потік).
-  Не задіяна; `is_secure_field()` → завжди `false`. Чому й план редизайну — секція
-  «ДЕТЕКЦІЯ СЕКРЕТНИХ ПОЛІВ ВИМКНЕНА» нижче.
+- `secure.rs` — кеш секретності (`CACHE: AtomicBool`) + `recompute` (ЛИШЕ нативна
+  перевірка, БЕЗ UIA). `secure_thread.rs` — виділений потік: WinEvent focus-хуки
+  (`EVENT_SYSTEM_FOREGROUND`+`EVENT_OBJECT_FOCUS`) + дебаунс 60мс + нативний перерахунок.
+  UIA з рантайму прибрано назавжди — деталі/аудит у секції «Детекція секретних полів».
 - `src/bin/live_spike.rs` — **РУЧНИЙ** харнес (див. нижче).
 - `src/bin/selection_smoke.rs` — **АВТОНОМНИЙ** live-харнес B1 (notepad-round-trip,
   сам перевіряє себе; код виходу 0/1). Запуск/готчі — нижче.
@@ -179,15 +179,20 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
   Notepad. Чистка між кейсами — Ctrl+A+Delete; розкладка ОС виставляється
   `SwitchLayout`+поллінг `current_layout_id`.
 
-## 🔴🔴 ДЕТЕКЦІЯ СЕКРЕТНИХ ПОЛІВ ВИМКНЕНА (до безпечного редизайну)
-**Статус:** уся UIA/WinEvent-машинерія детекції пароль-полів **НЕ задіяна**.
-`WindowsPlatform::new()` НЕ запускає потік `typofix-secure`, `is_secure_field()`
-→ **завжди `false`**. Плумбінг `Context.secure` у core/trait/runtime лишено ЯК Є
-(поле є, просто завжди false) — нульовий оверхед, поведінка точно як до коміту
-7be0124. Модулі `secure.rs`/`secure_thread.rs` лишені в дереві (`#[allow(dead_code)]`)
-для майбутнього редизайну; **не вмикати їх назад без редизайну нижче.**
+## Детекція секретних полів — НАТИВНА (`ES_PASSWORD`/passwordchar), БЕЗ UIA 🔴
+**Статус:** УВІМКНЕНА, але **лише дешева нативна** перевірка. `WindowsPlatform::new()`
+спавнить потік `typofix-secure` (WinEvent фокуса + дебаунс), `is_secure_field()` читає
+кеш-атомік. **UIA назавжди прибрано з рантайму** (нуль `GetFocusedElement`/`CoInitialize`/
+`CUIAutomation`) — він вмикав a11y-дерево цільової апки й лагав її (аудит нижче).
+- **Покрито:** нативні Win32 пароль-поля — входи/UAC/інсталятори/десктоп-логіни,
+  включно з Tab у поле пароля в межах того ж вікна (`EVENT_OBJECT_FOCUS` лишився, але
+  тепер тригерить лише ДЕШЕВУ нативну перевірку → лагів немає).
+- **НЕ покрито (свідомо):** браузерні/Electron `<input type=password>` (windowless,
+  потребували б UIA), WinRAR v7 (owner-draw маскування без жодної семантики). Це окреме
+  майбутнє завдання — потрібен підхід без активації a11y цільового застосунку.
+- Плумбінг ядра `Context.secure` незмінний (за `true` → bypass + скид буфера).
 
-### Чому вимкнено — АУДИТ кореня лагу (репро власника)
+### АУДИТ кореня лагу (репро власника) — чому UIA прибрано назавжди
 Симптом: при роботі IDE з file-watcher (шторм фокус-подій) курсор/ввід лагав 30-40 с.
 - **Спроба 1** (recompute на потоці LL-хука) — лаг, бо важкий UIA блокував message-pump
   LL-хука → `LowLevelHooksTimeout` → ОС лагала ВЕСЬ ввід.
@@ -214,93 +219,46 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
      завислому з'їдає до 40мс на виклик (× частота фокусів). `SMTO_ABORTIFHUNG` лише
      обмежує найгірший хвіст, не прибирає вартість.
 
-### План БЕЗПЕЧНОГО редизайну (на майбутнє — НЕ реалізовано)
+### Що реалізовано зараз (= план безпечного редизайну з аудиту)
 Пріоритет: НІКОЛИ не торкати a11y цільового застосунку на гарячому шляху.
-1. **Лише дешева НАТИВНА детекція, БЕЗ UIA взагалі** (або UIA як свідомий opt-in):
-   `ES_PASSWORD` через `GetWindowLongPtrW(GWL_STYLE)` — це читання НАШОГО боку (не
-   крос-процесний a11y), майже безкоштовне. `EM_GETPASSWORDCHAR` лишити лише для
-   edit-класів і з мінімальним таймаутом (або теж прибрати, якщо ризикує).
-2. **UIA — НІКОЛИ автоматично**, тим паче на не-браузерних/будь-яких застосунках на
-   гарячому шляху. Якщо колись треба веб-`<input type=password>` — то лише за явним
-   opt-in користувача й точно НЕ на кожен фокус.
-3. **Рідкісний перерахунок — лише на `EVENT_SYSTEM_FOREGROUND`** (зміна вікна, рідка),
-   а НЕ на `EVENT_OBJECT_FOCUS` (шторм). Прибрати глобальний `OBJECT_FOCUS`-хук зовсім.
-4. **Пре-фільтр процесу/класу ДО будь-якого крос-процесного виклику** (відомі
-   non-password класи/процеси — пропускати без жодного звернення).
-Очікуваний результат: детекція покриває нативні пароль-поля (логіни/інсталятори)
-з нульовим впливом на IDE; веб-поля свідомо НЕ покриваємо до окремого безпечного рішення.
+- **Лише НАТИВНА детекція, БЕЗ UIA.** `ES_PASSWORD` через `GetWindowLongPtrW(GWL_STYLE)`
+  — читання НАШОГО боку (не крос-процесний a11y), мікросекунди. `EM_GETPASSWORDCHAR`
+  лише на edit-класи, з `SMTO_ABORTIFHUNG` + малим таймаутом (40мс).
+- **UIA прибрано з коду назавжди** (не `allow(dead_code)`, а ВИДАЛЕНО): жодних
+  `GetFocusedElement`/`CoInitialize`/`CUIAutomation`/vtable/VARIANT. Features windows-sys
+  `Win32_System_Com`/`Win32_System_Variant` теж прибрано.
+- **Веб/Electron — майбутнє завдання.** Потрібен підхід без активації a11y (напр.
+  process-allowlist + явний opt-in), точно НЕ UIA на кожен фокус.
 
----
-
-## (Довідка для редизайну) Колишня архітектура детекції — `secure.rs` + `secure_thread.rs`
-⚠️ Нижче — опис ВИМКНЕНОЇ машинерії (мертвий код). Тримаємо як референс; вмикати лише
-після редизайну вище.
+## Архітектура нативної детекції — `secure.rs` + `secure_thread.rs` + `window.rs`
 - Натиски лише в RAM (канал mpsc), нічого на диск (правило №4).
-- **Архітектура — КЕШ + ОКРЕМИЙ ПОТІК (hot-path AND lag-safe!).** `Platform::is_secure_field()`
-  кличеться ЩОКРОКУ (на кожне натискання) → там НЕ можна робити
-  `SendMessageTimeout`/UIA(COM). Тому секретність рахується РАЗ на зміну фокуса й
-  кешується (`secure::CACHE: AtomicBool`); `is_secure_field` лише читає атомік
-  (`secure::cached_is_secure`, без блокувань).
-- **🔴 ПЕРЕРАХУНОК — НА ВЛАСНОМУ ПОТОЦІ `secure_thread.rs`, НЕ на потоці LL-хука
-  (інваріант стабільності, репро власника).** `secure::recompute` важкий (UIA
-  `GetFocusedElement` на IDE/Electron/Chromium вмикає accessibility-дерево —
-  десятки-сотні мс; + нативний `SendMessageTimeoutW`). Якщо крутити його у
-  WinEvent-callback на потоці LL-хука, він блокує message-pump того потоку →
-  `LowLevelHooksTimeout` → **лагає ВЕСЬ системний ввід** (симптом: IDE з file-watcher
-  сипле штормом `EVENT_OBJECT_FOCUS` → курсор лагав 30-40 с). Тому WinEvent focus-хуки
-  (`EVENT_SYSTEM_FOREGROUND`+`EVENT_OBJECT_FOCUS`), COM(STA) і `recompute` живуть на
-  виділеному потоці `typofix-secure` (`SecureHandle`), який тримає `WindowsPlatform`
-  поряд із `_hook`. Потік LL-хука лишає за собою лише дешевий
-  `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange` (без UIA).
-- **ДЕБАУНС (коалесинг шторму):** кожна фокус-подія НЕ запускає `recompute` одразу —
-  лише (пере)зводить таймер (`FOCUS_DEBOUNCE_MS=60мс`, NULL-window `SetTimer` →
-  `WM_TIMER` у чергу потоку); перерахунок іде ОДИН раз після осідання фокуса. Реакція
-  на «Tab у поле пароля» лишається миттєвою на людський масштаб, а пачки IDE не
-  молотять UIA. `KillTimer` обов'язковий на спрацюванні (SetTimer періодичний).
-- **Дворівнева детекція (у `recompute`, порядок = вартість):**
-  1. **Нативна** (`window::native_focus_is_secure`, дешево, без COM): фокусний
-     контрол (`window::foreground_focus_hwnd` = `GetForegroundWindow`→
-     `GetGUIThreadInfo.hwndFocus`, M2-метод як у `layout.rs`) має **`ES_PASSWORD`** у
-     `GWL_STYLE` АБО маскує ввід (**`EM_GETPASSWORDCHAR`≠0** через `SendMessageTimeoutW`,
-     40мс+`SMTO_ABORTIFHUNG`). Ловить нативні Win32-edit (логіни, інсталятори).
-     🔴 **ГЕЙТ EDIT-КЛАСУ (фікс false-positive secure):** нативну перевірку
-     застосовуємо ЛИШЕ якщо клас контрола edit-подібний (`class_is_edit_like`:
-     `GetClassNameW` містить `"edit"` — `Edit`/`RichEdit*`/`RichEditD2DPT`…). Біт
-     `0x20` на НЕ-edit вікні означає геть інше (BS_*/SS_*/LBS_*…), а
-     `EM_GETPASSWORDCHAR` — невизначене повідомлення → був би хибний `secure=true`,
-     що **глушив би ВСІ перемикання** у звичайному контролі. Справжні windowless
-     пароль-поля (WPF/веб) добирає UIA-фолбек — нічого не втрачаємо.
-  2. Якщо `false` → **UI Automation** (`secure::uia_focus_is_password`):
-     `IUIAutomation::GetFocusedElement` → `UIA_IsPasswordPropertyId`. **`GetFocusedElement`,
-     а не `ElementFromHandle(hwndFocus)`** — бо фокус буває на WINDOWLESS-елементі
-     (веб-`<input type=password>`, WPF/XAML/Electron) усередині одного render-HWND,
-     якого ElementFromHandle не дістав би. Ловить **веб/Electron** (підтверджено).
-  - Ядро (`Context.secure`) за `true` робить ПОВНИЙ bypass + скидає буфер
-    (`typofix-core/CLAUDE.md`).
-- **COM/UIA на windows-sys (крейт НЕ тягне `windows`).** windows-sys 0.59 дає лише
-  константи (`CUIAutomation`, `UIA_IsPasswordPropertyId`), але НЕ інтерфейси UIA →
-  vtable `IUIAutomation`(GetFocusedElement, слот 8)/`IUIAutomationElement`
-  (GetCurrentPropertyValue, слот 10) **оголошено вручну** в `secure.rs` (заглушки на
-  невикористані слоти). IID `IUIAutomation` теж локально. `CoInitializeEx(STA)` раз на
-  **потоці `typofix-secure`** (`com_init`; НЕ на хук-потоці!), `CUIAutomation` лінивий
-  у `thread_local`, `Release`/`CoUninitialize` при зупинці (`com_shutdown`). Фічі windows-sys: `Win32_System_Com` +
-  `Win32_System_Variant` (VARIANT/VT_BOOL). `EM_GETPASSWORDCHAR`=0x00D2, `ES_PASSWORD`=
-  0x0020 — локальні (sys не дає).
-- **ЖИВО ПІДТВЕРДЖЕНО (фактичні результати):**
-  - ✅ Нативний `ES_PASSWORD`-edit → native+UIA TRUE; звичайний → false
-    (`examples/secure_synth.rs`, exit 0 — доказ плумбінгу обох шляхів).
-  - ✅ **Веб** (`<input type=password>` у Firefox) → `is_secure_field()`=**TRUE** через UIA.
-  - ✅ Notepad (звичайне поле) → false (регрес).
-- 🔴 **ТВЕРДА МЕЖА — WinRAR v7 НЕ детектується (жодним шляхом).** Перевірено живцем
-  (вкл. .NET UIA: `FromHandle(focus).IsPassword=False` І пошук по піддереву → **жодного
-  IsPassword-елемента**): фокусне поле — кастомний edit (UIA бачить як `Pane`), без
-  `ES_PASSWORD`, без passwordchar, **без UIA IsPassword** (маскування суто owner-draw).
-  Тобто WinRAR v7 не виставляє семантику пароля НІДЕ → стандартними API недосяжний.
-  Початкове припущення «WinRAR=ES_PASSWORD» і «UIA закриє combo» для цієї версії
-  **не справдились**. Закрити можна лише process/dialog-евристикою (клас `#32770` +
-  заголовок «пароль» + `winrar.exe`) — крихко/локалізовано, **за рішенням власника**.
-- **Інші непокриті:** поля, що взагалі не виставляють ні нативної, ні UIA-семантики
-  пароля (як WinRAR). UIA на `EVENT_OBJECT_FOCUS` будує accessibility-дерево браузера
-  (вмикає a11y) — раніше це лагало ввід під час шторму фокус-подій IDE; **виправлено**
-  винесенням на окремий потік + дебаунсом (див. вище), тож більше не блокує hot-path.
+- **КЕШ + ОКРЕМИЙ ПОТІК (hot-path).** `Platform::is_secure_field()` кличеться ЩОКРОКУ →
+  лише читає атомік (`secure::cached_is_secure`, без блокувань). Перерахунок
+  (`secure::recompute`) — РАЗ на зміну фокуса, на виділеному потоці `typofix-secure`
+  (`SecureHandle`, поряд із `_hook` у `WindowsPlatform`). LL-hook потік (`hook.rs`)
+  лишає за собою лише дешевий `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange` (для
+  інвалідації буфера; її НЕ чіпати). Окремий потік уже не обов'язковий для суто
+  нативної перевірки, але тримає LL-pump абсолютно дешевим і дає дебаунс.
+- **WinEvent-хуки на потоці `secure_thread`:** `EVENT_SYSTEM_FOREGROUND` (зміна вікна)
+  + `EVENT_OBJECT_FOCUS` (Tab між контролами в межах вікна, напр. у поле пароля). Обидві
+  → лише (пере)зводять дебаунс-таймер. **Тепер це безпечно, бо перерахунок — дешевий
+  нативний** (раніше OBJECT_FOCUS тригерив важкий UIA → лаг; UIA прибрано).
+- **ДЕБАУНС:** `FOCUS_DEBOUNCE_MS=60мс`, NULL-window `SetTimer` → `WM_TIMER` у чергу
+  потоку; перерахунок ОДИН раз після осідання фокуса. `KillTimer` обов'язковий на
+  спрацюванні (SetTimer періодичний).
+- **Нативна перевірка (`window::native_focus_is_secure`, дешево, без COM):** фокусний
+  контрол (`window::foreground_focus_hwnd` = `GetForegroundWindow`→`GetGUIThreadInfo.
+  hwndFocus`, M2-метод як у `layout.rs`) має **`ES_PASSWORD`** у `GWL_STYLE` АБО маскує
+  ввід (**`EM_GETPASSWORDCHAR`≠0** через `SendMessageTimeoutW`, 40мс+`SMTO_ABORTIFHUNG`).
+  🔴 **ГЕЙТ EDIT-КЛАСУ (фікс false-positive secure):** перевіряємо ЛИШЕ якщо клас
+  edit-подібний (`class_is_edit_like`: `GetClassNameW` містить `"edit"` —
+  `Edit`/`RichEdit*`/`RichEditD2DPT`…). Біт `0x20` на НЕ-edit вікні означає геть інше
+  (BS_*/SS_*…), а `EM_GETPASSWORDCHAR` — невизначене повідомлення → був би хибний
+  `secure=true`, що **глушив би ВСІ перемикання** у звичайному контролі.
+- **Покриття:** ✅ нативні Win32-edit (логіни/UAC/інсталятори/десктоп) включно з Tab
+  у межах вікна. ❌ браузер/Electron/веб-`<input type=password>` (windowless — потрібен
+  UIA, свідомо НЕ робимо), ❌ WinRAR v7 (owner-draw, без жодної семантики пароля).
+- **Тести:** `secure::cache_defaults_and_resets_to_not_secure` (дефолт/скид → false),
+  `window::password_style_bit_is_parsed` (парсинг `ES_PASSWORD`-біта). Live-доказ
+  нативного шляху — `examples/secure_synth.rs` (ES_PASSWORD-edit→TRUE, звичайний→false).
 - `is_fullscreen` — best-effort, лише первинний монітор (follow-up: `MonitorFromWindow`).

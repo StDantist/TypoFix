@@ -158,7 +158,9 @@ pub struct DetectorConfig {
     /// (`ат`/`ді`/`св`/`ге` ≈ 0.0, бо нижче `freq_floor`) — НІ. Дефолт `2.0`
     /// (= `lp ≥ −7.0`): калібровано на eval — позитиви ≥ 2.0, шум = 0.0, чистий
     /// розрив. Ручний `uk.short.txt` лишається ДОДАТКОВИМ override (жаргон/forex/
-    /// рідкісні службові поза частотним покриттям). Одиночні (len==1) — НІКОЛИ.
+    /// рідкісні службові поза частотним покриттям). Одиночні (len==1) — ОКРЕМА гілка
+    /// `single_letter_service` (куроваий 1-літерний whitelist `у/а/в/з/і/о/є/я/с`);
+    /// решта одиночних заблокована. Деталі — секція «ПОЛІТИКА ПЕРЕМИКАННЯ» в CLAUDE.md.
     pub short_word_freq_switch_min: f64,
     /// **Precision-гейт частоти ПОТОЧНОГО (en) тексту — У КОН'ЮНКЦІЇ з
     /// `!current_is_dict`.** Коротке слово перемикається лише якщо поточний двійник
@@ -546,12 +548,13 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     //       АНГЛ. коротких: реальні англ. (`of`/`it`/`db`/`bp`/`lt`) НЕ чіпаємо.
     //   Поріг/LM-маржу обходимо (частий dict-hit достатньо), але НЕ veto, НЕ
     //   `best≠current` і **НЕ `min_switch_len`**.
-    // **⚠️ НИЖНЯ МЕЖА = ЛІТЕРАЛ `2`, НЕ `cfg.min_switch_len` (критична готча!).**
-    // Семантика — «не ОДИНОЧНИЙ токен» (замок precision проти коми `,`=`б`; len==1
-    // заблоковано). Шлях ЗАВЖДИ задуманий обходити `min_switch_len` — в'язати межу
-    // до нього було ПОМИЛКОЮ: рантаймовий `min_word_len=3` → `min_switch_len=3`
+    // **⚠️ НИЖНЯ МЕЖА 2-літерної гілки = ЛІТЕРАЛ `2`, НЕ `cfg.min_switch_len`
+    // (критична готча!).** Шлях ЗАВЖДИ задуманий обходити `min_switch_len` — в'язати
+    // межу до нього було ПОМИЛКОЮ: рантаймовий `min_word_len=3` → `min_switch_len=3`
     // вбивав ВСІ 2-літерні (`то`/`що`/`та` не перемикалися живцем; тести на
     // `default()`=2 цього не ловили). Літерал `2` відновлює їх незалежно від порога.
+    // **len==1 — ОКРЕМА гілка `single_letter_service` нижче** (куроване перемикання
+    // однолітерних укр. слів `у/а/в/з/і/о/є/я/с`); решта одиночних — заблоковано.
     let twin_frequent = best_score.freq >= cfg.short_word_freq_switch_min;
     // ДВА precision-гейти на ПОТОЧНИЙ (en) текст У КОН'ЮНКЦІЇ:
     //  (1) `!current_is_dict` — НЕ член словника. Захищає РІДКІСНІ-але-реальні
@@ -563,13 +566,36 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     //  (2) `freq < short_word_current_freq_max` — і НЕ частий поза словником.
     let current_not_frequent =
         !current_is_dict && current_score.freq < cfg.short_word_current_freq_max;
-    let short_word_switch = len >= 2
-        && len <= cfg.short_word_max_len
+
+    // **ОДНОЛІТЕРНЕ перемикання — ЛИШЕ для курованого 1-літерного whitelist
+    // (`у/а/в/з/і/о/є/я/с`).** Загальне правило коротких слів — «не ОДИНОЧНИЙ
+    // токен» (нижня межа `len >= 2`) — свідомо ПОСЛАБЛЕНО для реальних однолітерних
+    // укр. СЛІВ: вони самостійні слова, а їхні EN-джерела (`e/f/d/p/s/j/'/z/c`)
+    // беззмістовні окремо. **Замок precision — САМ whitelist** (`is_short_service`,
+    // 1-літерна секція `uk.short.txt`): реальні англ. одиночні `a/i/o` мапляться в
+    // укр. НЕ-слова (`ф/ш/щ`), яких у whitelist НЕМАЄ → не перемкнуться (підтверджено
+    // тестами). **ДОДАТКОВИЙ замок — `is_word_char(джерело)`:** блокує клавіші-
+    // ПУНКТУАЦІЮ (кома `,`=`б`, `;`=`ж`), щоб самотній роздільник НІКОЛИ не ставав
+    // літерою, навіть якщо його укр-двійник колись потрапить у whitelist (репро коми
+    // власника). Решта гейтів коротких слів (частота/LM-двійник двійника) калібровані
+    // під 2-літерні й тут зайві; лишаємо лише `!current_is_dict` (джерело — не реальне
+    // англ. слово) + стандартний `best≠current`/veto/поріг. Будь-яка зміна цього
+    // набору МУСИТЬ оновити секцію «ПОЛІТИКА ПЕРЕМИКАННЯ» в CLAUDE.md і regression-тести.
+    let single_letter_service = len == 1
         && best_is_dict
-        && (twin_frequent || ctx.rules.is_short_service(&best, &best_text))
-        && current_not_frequent
-        && current_score.lm < cfg.short_word_twin_lm_max
+        && ctx.rules.is_short_service(&best, &best_text)
+        && current_text.chars().next().is_some_and(is_word_char)
+        && !current_is_dict
         && confidence > cfg.base_threshold;
+
+    let short_word_switch = single_letter_service
+        || (len >= 2
+            && len <= cfg.short_word_max_len
+            && best_is_dict
+            && (twin_frequent || ctx.rules.is_short_service(&best, &best_text))
+            && current_not_frequent
+            && current_score.lm < cfg.short_word_twin_lm_max
+            && confidence > cfg.base_threshold);
 
     let switch = current.is_some()
         && best != ctx.current_layout
@@ -1360,26 +1386,48 @@ mod tests {
     }
 
     #[test]
-    fn mirror_does_not_switch_one_letter_service_word() {
-        // PRECISION: однолітерний токен НІКОЛИ не перемикається, НАВІТЬ якщо його
-        // двійник — whitelist-слово (`j`→«о», «о» у whitelist). Самотня літера
-        // практично ніколи не є самостійним словом, вартим перемикання; а на
-        // клавішах-пунктуації (кома=`б`) це прямий FP «кома в EN → «б»». Дзеркало
-        // піднято до `min_switch_len` (≥2). Раніше тут стояв ЗВОРОТНИЙ assert —
-        // контракт свідомо змінено (баг розпізнавання, репро власника).
+    fn single_letter_service_word_switches_when_whitelisted() {
+        // КОНТРАКТ ПОВЕРНЕНО (репро власника, ПОЛІТИКА ПЕРЕМИКАННЯ): однолітерне укр.
+        // СЛОВО, чий двійник у курованому 1-літерному whitelist (`j`→«о», «о» ∈
+        // whitelist), ПЕРЕМИКАЄТЬСЯ. EN-джерело `j` беззмістовне окремо; precision
+        // тримає сам whitelist. Раніше тут стояв `!switch` — надмірна блокада коми
+        // зачепила й реальні однолітерні слова (та регресія, яку чинимо).
         let langs = [en_code_profile(), uk_short_profile()];
         let rules = rules_with_short_service(&[("uk", "о")]);
         let ctx = ctx_with_rules(&langs, "en", &rules);
         let d = decide(&strokes(&[0x24]), &ctx); // en "j" / uk "о"
+        assert_eq!(d.current_text, "j");
         assert!(
-            !d.switch,
-            "одиночна літера не сміє перемикатися навіть із whitelist (conf={})",
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == "о",
+            "однолітерне whitelist-слово має перемкнутись (switch={} best={} '{}' conf={})",
+            d.switch,
+            d.best.as_str(),
+            d.best_text,
             d.confidence
         );
 
-        // Без whitelist — так само заблоковано (контроль причинності).
+        // Без whitelist — заблоковано (whitelist — ЄДИНИЙ шлях для одиночних).
         let plain = ctx_with(&langs, "en");
-        assert!(!decide(&strokes(&[0x24]), &plain).switch);
+        assert!(
+            !decide(&strokes(&[0x24]), &plain).switch,
+            "без whitelist одиночна літера не перемикається"
+        );
+    }
+
+    #[test]
+    fn single_letter_not_in_whitelist_does_not_switch() {
+        // Одиночна літера, чий двійник НЕ в 1-літерному whitelist, НЕ перемикається,
+        // навіть якщо він Є у словнику. Whitelist має лише «то» (2-літерне), а «о»
+        // (двійник `j`) — поза ним → блок. Замок precision для одиночних = whitelist.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "то")]); // «о» відсутнє
+        let ctx = ctx_with_rules(&langs, "en", &rules);
+        let d = decide(&strokes(&[0x24]), &ctx); // en "j" / uk "о"
+        assert!(
+            !d.switch,
+            "не-whitelisted одиночна літера не перемикається (conf={})",
+            d.confidence
+        );
     }
 
     // --- Регресія: самотня кома в EN не перемикається на «б» (репро власника) --

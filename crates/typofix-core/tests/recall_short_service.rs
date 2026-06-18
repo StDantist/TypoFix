@@ -89,24 +89,69 @@ fn ctx_cfg<'a>(
 }
 
 #[test]
-fn one_letter_tokens_never_switch() {
-    // КОНТРАКТ ЗМІНЕНО (раніше assert був ЗВОРОТНИЙ). Одиночний токен (len=1)
-    // НІКОЛИ не перемикається — навіть якщо його укр.-двійник у whitelist коротких
-    // службових слів. Причина: репро власника — кома `,` (en) сидить на клавіші
-    // `б`(uk, whitelist) → дзеркало хибно робило з коми «б». Самотня літера
-    // практично ніколи не є самостійним словом, вартим перемикання; precision >
-    // recall. Межа дзеркала — ЛІТЕРАЛ `len >= 2` (не cfg). Свідомий FN на одиночних.
-    let Some(langs) = real_profiles() else {
+fn single_letter_uk_words_switch() {
+    // КОНТРАКТ ПОВЕРНЕНО (репро власника, ПОЛІТИКА ПЕРЕМИКАННЯ): кожне куроване
+    // однолітерне укр. СЛОВО (у/а/в/з/і/о/є/я/с) перемикається зі свого EN-джерела
+    // (e/f/d/p/s/j/'/z/c — беззмістовні окремо). Whitelist (`uk.short.txt`,
+    // через `build_word_rules`) — замок precision. Раніше тут стояв ЗВОРОТНИЙ assert
+    // (надмірна блокада ВСІХ одиночних), що й вбило ці реальні слова — регресія.
+    let Some(langs) = real_profiles_with_freq() else {
         eprintln!("SKIP: реальні моделі відсутні");
         return;
     };
     let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
     let uk = &langs[0].layout;
-    for w in ["і", "й", "в", "у", "з"] {
+    for w in ["у", "а", "в", "з", "і", "о", "є", "я", "с"] {
         let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
         assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
+            "однолітерне укр. слово '{w}' має перемкнутись (switch={} best={} '{}' conf={:.2})",
+            d.switch,
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+}
+
+#[test]
+fn lone_punctuation_and_non_whitelisted_single_do_not_switch() {
+    // PRECISION-замок ПОЛІТИКИ ПЕРЕМИКАННЯ для одиночних символів:
+    //  - кома `,` (EN-пунктуація; uk-двійник «б» ПОЗА whitelist) — репро власника;
+    //  - `q`→`й` — «й» свідомо ПОЗА курованим списком (у/а/в/з/і/о/є/я/с);
+    //  - реальні англ. одиночні a/i/o — їхні uk-двійники ф/ш/щ — не слова.
+    // Жоден НЕ перемикається, навіть із повним whitelist (`build_word_rules`).
+    let Some(langs) = real_profiles_with_freq() else {
+        eprintln!("SKIP: реальні моделі відсутні");
+        return;
+    };
+    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let en = &langs[1].layout;
+    let uk = &langs[0].layout;
+    // Кома (роздільник) — будуємо страйк у EN-розкладці.
+    let d_comma = detector::decide(&strokes_in(en, ","), &ctx(&langs, "en", &rules));
+    assert!(
+        !d_comma.switch,
+        "самотня кома НЕ сміє перемикатись на «б» (best={} '{}' conf={:.2})",
+        d_comma.best.as_str(),
+        d_comma.best_text,
+        d_comma.confidence
+    );
+    // «й» — не в курованому whitelist.
+    let d_j = detector::decide(&strokes_in(uk, "й"), &ctx(&langs, "en", &rules));
+    assert!(
+        !d_j.switch,
+        "«й» поза whitelist НЕ сміє перемикатись (best={} '{}' conf={:.2})",
+        d_j.best.as_str(),
+        d_j.best_text,
+        d_j.confidence
+    );
+    // Реальні англ. одиночні a/i/o.
+    for w in ["a", "i", "o"] {
+        let d = detector::decide(&strokes_in(en, w), &ctx(&langs, "en", &rules));
+        assert!(
             !d.switch,
-            "1-літерний токен '{w}' НЕ має перемикатись (best={} '{}' conf={:.2})",
+            "англ. одиночна '{w}' НЕ сміє перемикатись (best={} '{}' conf={:.2})",
             d.best.as_str(),
             d.best_text,
             d.confidence

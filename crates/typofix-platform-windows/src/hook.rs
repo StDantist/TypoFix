@@ -1,11 +1,18 @@
 //! Живий перехоплювач вводу: `WH_KEYBOARD_LL` + `WH_MOUSE_LL` + WinEvent на
-//! зміну фокуса, усе на одному потоці з власним message-pump.
+//! зміну ПЕРЕДНЬОГО ВІКНА (для емісії `FocusChange`), усе на одному потоці з
+//! власним message-pump.
 //!
 //! ## Чому окремий потік із насосом
 //! Низькорівневі хуки ОС **доставляють події лише потоку, що їх установив, і
 //! лише поки той потік качає черга-повідомлень** (`GetMessage`/`DispatchMessage`).
 //! Без насоса callbacks мовчать. Тому: окремий потік ставить усі хуки, крутить
 //! pump, а зупиняється через `WM_QUIT` (`PostThreadMessage` із [`HookHandle`]).
+//!
+//! ## 🔴 Що тут НЕ робиться (інваріант стабільності)
+//! Детекція секретних полів (UIA/`SendMessageTimeoutW`) НЕ висить на цьому потоці —
+//! вона повільна й заблокувала б pump LL-хука (→ `LowLevelHooksTimeout` → лаг
+//! усього системного вводу). Її винесено на ОКРЕМИЙ потік ([`crate::secure_thread`]);
+//! тут лишається лише дешеве. Тому й хук `EVENT_OBJECT_FOCUS` живе там, а не тут.
 //!
 //! ## Цикл проти власного вводу (критично)
 //! Хук бачить і фізичний ввід, і НАШ `SendInput`. Власні події позначені
@@ -33,10 +40,9 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, EVENT_OBJECT_FOCUS, EVENT_SYSTEM_FOREGROUND, HC_ACTION, HHOOK,
-    KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
-    WM_SYSKEYUP,
+    UnhookWindowsHookEx, EVENT_SYSTEM_FOREGROUND, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT,
+    LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::keystate::ModSnapshot;
@@ -123,31 +129,16 @@ fn hook_thread_main(sender: Sender<InputEvent>, tid_out: Arc<AtomicU32>) {
         });
     });
 
-    // COM для UIA-детекції секретних полів — на ЦЬОМУ потоці (тут є message-pump,
-    // тож STA). Скидаємо кеш секретності (нова сесія) і рахуємо для поточного фокуса.
-    crate::secure::com_init();
-    crate::secure::reset_cache();
-    crate::secure::recompute();
-
     unsafe {
         let hmod = GetModuleHandleW(std::ptr::null());
         let kb_hook: HHOOK = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0);
         let mouse_hook: HHOOK = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hmod, 0);
-        // Зміна вікна на передньому плані (для FocusChange + перерахунок секретності).
+        // Зміна вікна на передньому плані — лише для емісії `FocusChange` (дешево).
+        // Перерахунок секретності тут НЕ робимо: він на окремому потоці
+        // (`crate::secure_thread`), бо UIA блокував би pump LL-хука (лаг вводу).
         let fg_hook: HWINEVENTHOOK = SetWinEventHook(
             EVENT_SYSTEM_FOREGROUND,
             EVENT_SYSTEM_FOREGROUND,
-            std::ptr::null_mut(),
-            Some(winevent_proc),
-            0,
-            0,
-            WINEVENT_OUTOFCONTEXT,
-        );
-        // Зміна фокуса МІЖ контролами в межах вікна (Tab у поле пароля тощо) —
-        // потрібна, щоб секретність перераховувалась і без зміни вікна.
-        let focus_hook: HWINEVENTHOOK = SetWinEventHook(
-            EVENT_OBJECT_FOCUS,
-            EVENT_OBJECT_FOCUS,
             std::ptr::null_mut(),
             Some(winevent_proc),
             0,
@@ -177,12 +168,8 @@ fn hook_thread_main(sender: Sender<InputEvent>, tid_out: Arc<AtomicU32>) {
         if !fg_hook.is_null() {
             UnhookWinEvent(fg_hook);
         }
-        if !focus_hook.is_null() {
-            UnhookWinEvent(focus_hook);
-        }
     }
 
-    crate::secure::com_shutdown();
     HOOK_STATE.with(|s| *s.borrow_mut() = None);
 }
 
@@ -286,24 +273,15 @@ unsafe extern "system" fn winevent_proc(
     _id_thread: u32,
     _ms_event_time: u32,
 ) {
-    match event {
-        // Зміна вікна на передньому плані: інвалідуємо буфер (FocusChange) і
-        // перераховуємо секретність нового фокуса.
-        EVENT_SYSTEM_FOREGROUND => {
-            let info = window_info_for_hwnd(hwnd);
-            HOOK_STATE.with(|s| {
-                if let Some(state) = s.borrow().as_ref() {
-                    state.emit(InputEvent::FocusChange(info));
-                }
-            });
-            crate::secure::recompute();
-        }
-        // Зміна фокуса між контролами (без зміни вікна) — лише перерахунок
-        // секретності (буфер-інвалідацію тут НЕ робимо, щоб не міняти наявну
-        // семантику; секретний гейт у ядрі сам скине буфер для поля пароля).
-        EVENT_OBJECT_FOCUS => {
-            crate::secure::recompute();
-        }
-        _ => {}
+    // Зміна вікна на передньому плані: інвалідуємо буфер (FocusChange). Дешево —
+    // лише `window_info_for_hwnd` + надсилання в канал; жодного UIA/COM тут (див.
+    // модульний док). Перерахунок секретності — на `crate::secure_thread`.
+    if event == EVENT_SYSTEM_FOREGROUND {
+        let info = window_info_for_hwnd(hwnd);
+        HOOK_STATE.with(|s| {
+            if let Some(state) = s.borrow().as_ref() {
+                state.emit(InputEvent::FocusChange(info));
+            }
+        });
     }
 }

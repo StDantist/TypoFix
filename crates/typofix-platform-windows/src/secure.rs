@@ -197,3 +197,28 @@ fn uia_focus_is_password() -> bool {
         is_pw
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Дефолт і скидання кешу — НЕ secure (fail-safe: хибний `secure=true` глушить
+    /// УСІ перемикання, тож база й reset мусять бути `false`; `recompute` піднімає
+    /// `true` лише для справжнього пароль-поля). Кеш процес-глобальний; цей тест
+    /// єдиний його чіпає → без гонок із паралельними.
+    #[test]
+    fn cache_defaults_and_resets_to_not_secure() {
+        // Старт сесії скидає кеш → не secure.
+        reset_cache();
+        assert!(!cached_is_secure(), "після reset кеш має бути НЕ secure");
+
+        // Імітуємо «зайшли в поле пароля» → потім вихід (reset скидає назад).
+        CACHE.store(true, Ordering::Relaxed);
+        assert!(cached_is_secure());
+        reset_cache();
+        assert!(
+            !cached_is_secure(),
+            "вихід із поля (reset) мусить повернути НЕ secure"
+        );
+    }
+}

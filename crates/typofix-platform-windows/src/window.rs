@@ -7,9 +7,9 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-    GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG,
-    SM_CXSCREEN, SM_CYSCREEN,
+    GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, SendMessageTimeoutW, GUITHREADINFO, GWL_STYLE,
+    SMTO_ABORTIFHUNG, SM_CXSCREEN, SM_CYSCREEN,
 };
 
 /// Біт стилю стандартного EDIT-контролу «текст приховано» (`ES_PASSWORD` із
@@ -150,10 +150,33 @@ pub(crate) fn foreground_focus_hwnd() -> Option<HWND> {
     }
 }
 
-/// **Нативна** (дешева, без COM) перевірка секретності контрола: `ES_PASSWORD` у
-/// `GWL_STYLE` **АБО** маскування вводу (`EM_GETPASSWORDCHAR` ≠ 0; ловить поля з
-/// пароль-символом, виставленим у рантаймі без біта стилю — інсталятори, логіни).
+/// Чи ім'я класу контрола — EDIT-подібне (`Edit`/`RichEdit*`/`RICHEDIT50W`/
+/// `RichEditD2DPT`…). 🔴 **Гейт precision (фікс false-positive secure):**
+/// `ES_PASSWORD`(біт `0x20`) і `EM_GETPASSWORDCHAR` мають сенс ЛИШЕ для
+/// EDIT-контролів. На НЕ-edit вікні той самий біт `0x20` означає геть інше
+/// (BS_*/SS_*/LBS_*…), а `EM_GETPASSWORDCHAR` — невизначене повідомлення → хибний
+/// `secure=true`, що **глушив би ВСІ перемикання** у звичайному контролі. Тому
+/// нативну перевірку застосовуємо лише до edit-подібних класів; решту (вкл. справжні
+/// windowless пароль-поля WPF/веб) добирає UIA-фолбек. Невдача читання класу → `false`.
+fn class_is_edit_like(hwnd: HWND) -> bool {
+    let mut buf = [0u16; 64];
+    let len = unsafe { GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    if len <= 0 {
+        return false;
+    }
+    let class = String::from_utf16_lossy(&buf[..len as usize]).to_ascii_lowercase();
+    class.contains("edit")
+}
+
+/// **Нативна** (дешева, без COM) перевірка секретності контрола: лише для
+/// EDIT-подібного класу ([`class_is_edit_like`]) — `ES_PASSWORD` у `GWL_STYLE`
+/// **АБО** маскування вводу (`EM_GETPASSWORDCHAR` ≠ 0; ловить поля з пароль-символом,
+/// виставленим у рантаймі без біта стилю — інсталятори, логіни). НЕ-edit клас → `false`
+/// (нативно не secure; UIA-фолбек добере справжні пароль-поля інших типів).
 pub(crate) fn native_focus_is_secure(hwnd: HWND) -> bool {
+    if !class_is_edit_like(hwnd) {
+        return false;
+    }
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) };
     style_is_password(style) || focus_has_password_char(hwnd)
 }

@@ -25,6 +25,8 @@ mod layout;
 #[cfg(windows)]
 mod secure;
 #[cfg(windows)]
+mod secure_thread;
+#[cfg(windows)]
 mod selection;
 #[cfg(windows)]
 mod window;
@@ -57,6 +59,7 @@ mod windows_impl {
     use typofix_platform::{Action, InputEvent, LayoutId, Platform, WindowInfo};
 
     use crate::hook::HookHandle;
+    use crate::secure_thread::SecureHandle;
     use crate::{inject, layout, window};
 
     /// Жива реалізація [`Platform`] для Windows.
@@ -68,18 +71,28 @@ mod windows_impl {
         rx: Receiver<InputEvent>,
         /// Живий хук-потік; Drop зупиняє його коректно. Поле тримає його живим.
         _hook: HookHandle,
+        /// Окремий потік детекції секретних полів (WinEvent фокуса + UIA); Drop
+        /// зупиняє його. Винесений з `_hook`, щоб важкий UIA не блокував LL-pump.
+        _secure: SecureHandle,
     }
 
     impl WindowsPlatform {
         /// Встановити хуки й почати приймати події.
         ///
         /// ⚠️ Побічний ефект для всієї системи: ставить `WH_KEYBOARD_LL` /
-        /// `WH_MOUSE_LL`. Для автотестів використовуй чисті модулі
-        /// (`keystate`/`scancode`) або запити без хука (`layout`/`window`).
+        /// `WH_MOUSE_LL` (потік `_hook`) і WinEvent focus-хуки (потік `_secure`).
+        /// Для автотестів використовуй чисті модулі (`keystate`/`scancode`) або
+        /// запити без хука (`layout`/`window`).
         pub fn new() -> Self {
             let (tx, rx) = channel();
             let hook = HookHandle::start(tx);
-            Self { rx, _hook: hook }
+            // Детекція секретних полів — на власному потоці (інакше UIA лагав би ввід).
+            let secure = SecureHandle::start();
+            Self {
+                rx,
+                _hook: hook,
+                _secure: secure,
+            }
         }
     }
 

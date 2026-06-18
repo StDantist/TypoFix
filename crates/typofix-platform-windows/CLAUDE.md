@@ -11,7 +11,12 @@
 - `window.rs` — активне вікно (`GetForegroundWindow`/`QueryFullProcessImageNameW`).
 - `inject.rs` — `SendInput`/перемикання розкладки + `send_ctrl_c` (Ctrl+C через VK).
 - `selection.rs` — `get_selection_text()`: синтетичний Ctrl+C → читання буфера.
-- `hook.rs` — LL-хуки + message-pump потік.
+- `hook.rs` — LL-хуки (клавіатура/миша) + `EVENT_SYSTEM_FOREGROUND` (лише емісія
+  `FocusChange`) + message-pump потік. 🔴 **Жодного UIA/COM/`SendMessageTimeoutW`
+  тут** — інакше pump LL-хука блокується й увесь системний ввід лагає.
+- `secure_thread.rs` — ОКРЕМИЙ потік детекції секретних полів: WinEvent focus-хуки
+  (`EVENT_SYSTEM_FOREGROUND`+`EVENT_OBJECT_FOCUS`) + COM(STA) + UIA + власний pump,
+  з ДЕБАУНСОМ. Сюди винесено `secure::recompute` (важкий) — див. секцію приватності.
 - `src/bin/live_spike.rs` — **РУЧНИЙ** харнес (див. нижче).
 - `src/bin/selection_smoke.rs` — **АВТОНОМНИЙ** live-харнес B1 (notepad-round-trip,
   сам перевіряє себе; код виходу 0/1). Запуск/готчі — нижче.
@@ -173,23 +178,42 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
   Notepad. Чистка між кейсами — Ctrl+A+Delete; розкладка ОС виставляється
   `SwitchLayout`+поллінг `current_layout_id`.
 
-## Приватність / детекція секретних полів (правило №4) — `secure.rs` + `hook.rs`
+## Приватність / детекція секретних полів (правило №4) — `secure.rs` + `secure_thread.rs`
 - Натиски лише в RAM (канал mpsc), нічого на диск (правило №4).
-- **Архітектура — КЕШ НА ЗМІНІ ФОКУСА (hot-path!).** `Platform::is_secure_field()`
+- **Архітектура — КЕШ + ОКРЕМИЙ ПОТІК (hot-path AND lag-safe!).** `Platform::is_secure_field()`
   кличеться ЩОКРОКУ (на кожне натискання) → там НЕ можна робити
   `SendMessageTimeout`/UIA(COM). Тому секретність рахується РАЗ на зміну фокуса й
   кешується (`secure::CACHE: AtomicBool`); `is_secure_field` лише читає атомік
-  (`secure::cached_is_secure`, без блокувань). Перерахунок (`secure::recompute`)
-  висить на WinEvent-хуках у `hook.rs`: **`EVENT_SYSTEM_FOREGROUND`** (зміна вікна —
-  поряд із емісією `FocusChange`) + **`EVENT_OBJECT_FOCUS`** (зміна фокуса МІЖ
-  контролами в межах вікна, напр. Tab у поле пароля). Перерахунок іде на хук-потоці
-  (там є message-pump → STA для COM).
+  (`secure::cached_is_secure`, без блокувань).
+- **🔴 ПЕРЕРАХУНОК — НА ВЛАСНОМУ ПОТОЦІ `secure_thread.rs`, НЕ на потоці LL-хука
+  (інваріант стабільності, репро власника).** `secure::recompute` важкий (UIA
+  `GetFocusedElement` на IDE/Electron/Chromium вмикає accessibility-дерево —
+  десятки-сотні мс; + нативний `SendMessageTimeoutW`). Якщо крутити його у
+  WinEvent-callback на потоці LL-хука, він блокує message-pump того потоку →
+  `LowLevelHooksTimeout` → **лагає ВЕСЬ системний ввід** (симптом: IDE з file-watcher
+  сипле штормом `EVENT_OBJECT_FOCUS` → курсор лагав 30-40 с). Тому WinEvent focus-хуки
+  (`EVENT_SYSTEM_FOREGROUND`+`EVENT_OBJECT_FOCUS`), COM(STA) і `recompute` живуть на
+  виділеному потоці `typofix-secure` (`SecureHandle`), який тримає `WindowsPlatform`
+  поряд із `_hook`. Потік LL-хука лишає за собою лише дешевий
+  `EVENT_SYSTEM_FOREGROUND` → емісія `FocusChange` (без UIA).
+- **ДЕБАУНС (коалесинг шторму):** кожна фокус-подія НЕ запускає `recompute` одразу —
+  лише (пере)зводить таймер (`FOCUS_DEBOUNCE_MS=60мс`, NULL-window `SetTimer` →
+  `WM_TIMER` у чергу потоку); перерахунок іде ОДИН раз після осідання фокуса. Реакція
+  на «Tab у поле пароля» лишається миттєвою на людський масштаб, а пачки IDE не
+  молотять UIA. `KillTimer` обов'язковий на спрацюванні (SetTimer періодичний).
 - **Дворівнева детекція (у `recompute`, порядок = вартість):**
   1. **Нативна** (`window::native_focus_is_secure`, дешево, без COM): фокусний
      контрол (`window::foreground_focus_hwnd` = `GetForegroundWindow`→
      `GetGUIThreadInfo.hwndFocus`, M2-метод як у `layout.rs`) має **`ES_PASSWORD`** у
      `GWL_STYLE` АБО маскує ввід (**`EM_GETPASSWORDCHAR`≠0** через `SendMessageTimeoutW`,
      40мс+`SMTO_ABORTIFHUNG`). Ловить нативні Win32-edit (логіни, інсталятори).
+     🔴 **ГЕЙТ EDIT-КЛАСУ (фікс false-positive secure):** нативну перевірку
+     застосовуємо ЛИШЕ якщо клас контрола edit-подібний (`class_is_edit_like`:
+     `GetClassNameW` містить `"edit"` — `Edit`/`RichEdit*`/`RichEditD2DPT`…). Біт
+     `0x20` на НЕ-edit вікні означає геть інше (BS_*/SS_*/LBS_*…), а
+     `EM_GETPASSWORDCHAR` — невизначене повідомлення → був би хибний `secure=true`,
+     що **глушив би ВСІ перемикання** у звичайному контролі. Справжні windowless
+     пароль-поля (WPF/веб) добирає UIA-фолбек — нічого не втрачаємо.
   2. Якщо `false` → **UI Automation** (`secure::uia_focus_is_password`):
      `IUIAutomation::GetFocusedElement` → `UIA_IsPasswordPropertyId`. **`GetFocusedElement`,
      а не `ElementFromHandle(hwndFocus)`** — бо фокус буває на WINDOWLESS-елементі
@@ -202,8 +226,8 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
   vtable `IUIAutomation`(GetFocusedElement, слот 8)/`IUIAutomationElement`
   (GetCurrentPropertyValue, слот 10) **оголошено вручну** в `secure.rs` (заглушки на
   невикористані слоти). IID `IUIAutomation` теж локально. `CoInitializeEx(STA)` раз на
-  хук-потоці (`com_init`), `CUIAutomation` лінивий у `thread_local`, `Release`/
-  `CoUninitialize` при зупинці (`com_shutdown`). Фічі windows-sys: `Win32_System_Com` +
+  **потоці `typofix-secure`** (`com_init`; НЕ на хук-потоці!), `CUIAutomation` лінивий
+  у `thread_local`, `Release`/`CoUninitialize` при зупинці (`com_shutdown`). Фічі windows-sys: `Win32_System_Com` +
   `Win32_System_Variant` (VARIANT/VT_BOOL). `EM_GETPASSWORDCHAR`=0x00D2, `ES_PASSWORD`=
   0x0020 — локальні (sys не дає).
 - **ЖИВО ПІДТВЕРДЖЕНО (фактичні результати):**
@@ -220,7 +244,7 @@ bin має `required-features`, тож `cargo build`/`clippy --all-targets` БЕ
   **не справдились**. Закрити можна лише process/dialog-евристикою (клас `#32770` +
   заголовок «пароль» + `winrar.exe`) — крихко/локалізовано, **за рішенням власника**.
 - **Інші непокриті:** поля, що взагалі не виставляють ні нативної, ні UIA-семантики
-  пароля (як WinRAR). Можлива оптимізація: UIA на КОЖЕН `EVENT_OBJECT_FOCUS` будує
-  accessibility-дерево браузера (вмикає a11y) — прийнятно (фокус-події рідкі), але
-  якщо стане критично — кешувати/фільтрувати клас контрола перед UIA.
+  пароля (як WinRAR). UIA на `EVENT_OBJECT_FOCUS` будує accessibility-дерево браузера
+  (вмикає a11y) — раніше це лагало ввід під час шторму фокус-подій IDE; **виправлено**
+  винесенням на окремий потік + дебаунсом (див. вище), тож більше не блокує hot-path.
 - `is_fullscreen` — best-effort, лише первинний монітор (follow-up: `MonitorFromWindow`).

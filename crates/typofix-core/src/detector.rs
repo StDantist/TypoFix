@@ -495,9 +495,8 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // Стандартний шлях: довжина + поріг + (для коротких) LM-перевага кандидата.
     let standard_ok = len >= cfg.min_switch_len && confidence > cfg.threshold(len) && short_word_ok;
 
-    // **Дзеркальна релаксація для коротких слів (min_switch_len ≤ len ≤
-    // short_word_max_len; дефолт → РІВНО len==2).** Принцип «справжнє слово ↔
-    // біліберда»: перемикаємо коротке, якщо
+    // **Дзеркальна релаксація для коротких слів (2 ≤ len ≤ short_word_max_len).**
+    // Принцип «справжнє слово ↔ біліберда»: перемикаємо коротке, якщо
     //   (а) кандидат — куроване СЛУЖБОВЕ слово цільової мови (whitelist у `rules`,
     //       не довільний збіг у повному словнику — інакше шум `ат`/`ді` від
     //       корпусу пробивав би поріг, як код-токени `fn`/`ls`); І
@@ -506,14 +505,17 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     //       неправдоподібний). Тоді `от`/`ти`/`чи` форсяться на dict-hit, а реальні
     //       короткі `is`/`to`/`db` — НІ (їхній двійник — теж справжнє слово → умова
     //       (б) хибна). Поріг/LM-маржу обходимо (dict-hit достатньо), але НЕ veto,
-    //       НЕ `best≠current` і **НЕ `min_switch_len`** (одиночні токени — нижче).
-    // **Нижня межа дзеркала = `min_switch_len` (≥2) — ЗАМОК PRECISION.** Дзеркало
-    // НЕ сміє перемикати ОДИНОЧНИЙ токен (`len=1`). Інакше самотня кома, набрана в
-    // EN (клавіша `,`=`б`(0x33) у UK), форситься на whitelist-«б» — а кома в англ.
-    // це звичайна пунктуація, яку користувач і мав на увазі (precision > recall).
-    // Самотні літери на кшталт «б»/«о»/«я» практично ніколи не є самостійним словом,
-    // вартим перемикання. 2+-літерні службові слова («от»/«ти»/«we») лишаються.
-    let mirror_ok = len >= cfg.min_switch_len
+    //       НЕ `best≠current` і **НЕ `min_switch_len`** (саме в цьому суть дзеркала).
+    // **⚠️ НИЖНЯ МЕЖА = ЛІТЕРАЛ `2`, НЕ `cfg.min_switch_len` (критична готча!).**
+    // Семантика межі — «не ОДИНОЧНИЙ токен» (замок precision проти коми `,`=`б`,
+    // що форситься на whitelist-«б»; len=1 досі заблоковано). Дзеркало ЗАВЖДИ було
+    // задумане обходити `min_switch_len` для коротких службових слів — тож в'язати
+    // межу до `cfg.min_switch_len` було ПОМИЛКОЮ: рантаймовий `min_word_len=3`
+    // (`src-tauri`) → `min_switch_len=3` → дзеркало вбивало ВСІ 2-літерні (`то`/`що`
+    // не перемикалися живцем, хоча всі тести на `default()`=2 цього не ловили).
+    // Літерал `2` відновлює 2-літерні службові слова НЕЗАЛЕЖНО від користувацького
+    // порога. Одиночні («б»/«о»/«я») лишаються заблокованими (precision > recall).
+    let mirror_ok = len >= 2
         && len <= cfg.short_word_max_len
         && best_is_dict
         && ctx.rules.is_short_service(&best, &best_text)
@@ -1008,6 +1010,23 @@ mod tests {
         }
     }
 
+    fn ctx_with_config_rules<'a>(
+        langs: &'a [LanguageProfile],
+        current: &str,
+        config: DetectorConfig,
+        rules: &'a WordRules,
+    ) -> Context<'a> {
+        Context {
+            active_window: Default::default(),
+            current_layout: LayoutId::new(current),
+            languages: langs,
+            config,
+            exclusions: &NO_EXCL,
+            rules,
+            secure: false,
+        }
+    }
+
     #[test]
     fn switches_long_gibberish_to_real_word() {
         let langs = [en_profile(), uk_profile()];
@@ -1394,6 +1413,52 @@ mod tests {
         assert!(
             !d.switch,
             "кома без whitelist не перемикається (conf={})",
+            d.confidence
+        );
+    }
+
+    // --- Регресія: рантаймовий min_switch_len > 2 НЕ вбиває 2-літерне дзеркало ---
+    // ЖИВИЙ баг: `src-tauri` дефолтить `min_word_len=3` → `min_switch_len=3`. Поки
+    // межа дзеркала була `cfg.min_switch_len`, умова `2 >= 3` коротко-замикала ВСІ
+    // 2-літерні (`то`/`що` не перемикалися живцем). Тепер межа — літерал `2`.
+
+    #[test]
+    fn mirror_switches_two_letter_service_word_with_runtime_min_len_3() {
+        // `nj`(en, не-слово) → `то`(uk, whitelist), але cfg як у проді: min_switch_len=3.
+        let langs = [en_code_profile(), uk_short_profile()];
+        let rules = rules_with_short_service(&[("uk", "то")]);
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config_rules(&langs, "en", cfg, &rules);
+        let d = decide(&strokes(&[0x31, 0x24]), &ctx); // en "nj" / uk "то"
+        assert_eq!(d.current_text, "nj");
+        assert!(
+            d.switch && d.best == LayoutId::new("uk") && d.best_text == "то",
+            "2-літерне службове має перемкнутись попри min_switch_len=3 \
+             (switch={}, best={} '{}', conf={})",
+            d.switch,
+            d.best.as_str(),
+            d.best_text,
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn lone_comma_blocked_even_with_runtime_min_len_3() {
+        // Регрес фікса коми ЗБЕРЕЖЕНО: floor=2 не пропускає len==1 і при min_switch_len=3.
+        let langs = [comma_en_profile(), comma_uk_profile()];
+        let rules = rules_with_short_service(&[("uk", "б")]);
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config_rules(&langs, "en", cfg, &rules);
+        let d = decide(&strokes(&[0x33]), &ctx); // en "," / uk "б"
+        assert!(
+            !d.switch,
+            "самотня кома не сміє перемикатись при жодному min_switch_len (conf={})",
             d.confidence
         );
     }

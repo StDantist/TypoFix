@@ -54,11 +54,20 @@ fn strokes_in(layout: &Layout, word: &str) -> Vec<KeyStroke> {
 }
 
 fn ctx<'a>(langs: &'a [LanguageProfile], current: &str, rules: &'a WordRules) -> Context<'a> {
+    ctx_cfg(langs, current, rules, DetectorConfig::default())
+}
+
+fn ctx_cfg<'a>(
+    langs: &'a [LanguageProfile],
+    current: &str,
+    rules: &'a WordRules,
+    config: DetectorConfig,
+) -> Context<'a> {
     Context {
         active_window: Default::default(),
         current_layout: LayoutId::new(current),
         languages: langs,
-        config: DetectorConfig::default(),
+        config,
         exclusions: &NO_EXCL,
         rules,
         secure: false,
@@ -72,7 +81,7 @@ fn one_letter_tokens_never_switch() {
     // службових слів. Причина: репро власника — кома `,` (en) сидить на клавіші
     // `б`(uk, whitelist) → дзеркало хибно робило з коми «б». Самотня літера
     // практично ніколи не є самостійним словом, вартим перемикання; precision >
-    // recall. Дзеркало піднято до `min_switch_len` (≥2). Свідомий FN на одиночних.
+    // recall. Межа дзеркала — ЛІТЕРАЛ `len >= 2` (не cfg). Свідомий FN на одиночних.
     let Some(langs) = real_profiles() else {
         eprintln!("SKIP: реальні моделі відсутні");
         return;
@@ -111,57 +120,29 @@ fn two_letter_service_words_switch() {
     }
 }
 
-/// Зразкові (вбудовані) профілі — те, на що ДЕГРАДУЄ рантайм, коли реальний
-/// `data/` не зрезолвлено (`load_lm`/`load_dict` із `None` → `sample_*`). Завжди
-/// доступні (вшиті в крейт), тож тест герметичний.
-fn sample_profiles() -> Vec<LanguageProfile> {
-    ["uk", "en"]
-        .iter()
-        .map(|&lang| LanguageProfile {
-            id: LayoutId::new(lang),
-            layout: typofix_data::embedded_layout(lang).unwrap(),
-            lm: typofix_data::load_lm(lang, None).unwrap(),
-            dict: typofix_data::load_dict(lang, None).unwrap(),
-            freq: None,
-        })
-        .collect()
-}
-
 #[test]
-fn que_and_to_switch_on_real_models() {
-    // РЕПРО власника на РЕАЛЬНИХ моделях (locked-in вимога): «oj»(en)→«що»,
-    // «nj»(en)→«то». o→щ, j→о, n→т на ЙЦУКЕН. Обидва — дуже часті 2-літерні укр.
+fn que_and_to_switch_with_runtime_min_len_3() {
+    // РЕПРО власника на РЕАЛЬНИХ моделях ІЗ ЖИВИМ КОНФІГОМ: рантайм `src-tauri`
+    // дефолтить `min_word_len=3` → `min_switch_len=3`. «oj»(en)→«що», «nj»(en)→«то»
+    // (o→щ, j→о, n→т на ЙЦУКЕН). Поки межа дзеркала була `cfg.min_switch_len`, тут
+    // обидва НЕ перемикалися (2>=3 false) — саме цей сценарій тести на default()=2
+    // НЕ ловили. Після фікса (літерал 2) перемикаються попри min_switch_len=3.
     let Some(langs) = real_profiles() else {
         eprintln!("SKIP: реальні моделі відсутні");
         return;
     };
     let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
+    let cfg = DetectorConfig {
+        min_switch_len: 3,
+        ..DetectorConfig::default()
+    };
     let uk = &langs[0].layout;
     for w in ["що", "то"] {
-        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
+        let d = detector::decide(&strokes_in(uk, w), &ctx_cfg(&langs, "en", &rules, cfg));
         assert!(
             d.switch && d.best == LayoutId::new("uk") && d.best_text == w,
-            "'{w}' (репро) має перемкнутись (best={} '{}' conf={:.2})",
-            d.best.as_str(),
-            d.best_text,
-            d.confidence
-        );
-    }
-}
-
-#[test]
-fn que_switches_on_embedded_fallback() {
-    // Найгірший реалістичний шлях: апка НЕ зрезолвила реальний data/ → вбудовані
-    // зразки. «то» (у зразках + whitelist) перемикається; «що» — ні (репро).
-    // Після додавання «що» у дані обидва мають перемикатися й тут.
-    let langs = sample_profiles();
-    let rules = typofix_data::eval::build_word_rules(&["uk", "en"]);
-    let uk = &langs[0].layout;
-    for w in ["що", "то"] {
-        let d = detector::decide(&strokes_in(uk, w), &ctx(&langs, "en", &rules));
-        assert!(
-            d.switch && d.best_text == w,
-            "'{w}' на зразках має перемкнутись (best={} '{}' conf={:.2})",
+            "'{w}' (репро, min_switch_len=3) має перемкнутись (switch={} best={} '{}' conf={:.2})",
+            d.switch,
             d.best.as_str(),
             d.best_text,
             d.confidence

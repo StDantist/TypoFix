@@ -69,8 +69,12 @@ recall — за сумніву НЕ перемикати.**
   поважаються. ⚠️ **eval СЛІПИЙ до live** (годує цілі слова в `decide`, оминаючи
   буфер/`step`) → precision-гарантії headline на live НЕ поширюються; покриття —
   лише юніти (`dict::has_prefix_*`, `detector::live_*`) + E2E virtual
-  (`tests/live_switch.rs`). Тому дефолт OFF + ручне живе калібрування. Деталі
-  інтеграції — нижче, секція «Інтеграція live-switch»; дизайн —
+  (`tests/live_switch.rs`). Тому дефолт OFF + ручне живе калібрування.
+  **`live_min_len` дефолт = 4** (калібровано `typofix-data --bin live_calibrate` на
+  реальних моделях: на in-dict словах FP≈0, на held-out OpenSubtitles FP падає
+  0.26%→0.03% при 3→4, recall лишається 99.7%; held-out засмічений рос. словами →
+  реальна укр. FP-частота ще нижча; `user.txt` — точковий важіль на діри fst).
+  Деталі інтеграції — нижче, секція «Інтеграція live-switch»; дизайн —
   `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
 
 ### Реєстр: ЩО НЕ ПЕРЕМИКАЄТЬСЯ

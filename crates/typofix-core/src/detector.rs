@@ -208,9 +208,12 @@ pub struct DetectorConfig {
     /// цілі слова, оминаючи буфер) → вмикати лише після ручного живого калібрування.
     /// Деталі — `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
     pub live_switch_enabled: bool,
-    /// **Мінімальна довжина буфера (страйків) для live-перемикання** (default `3`).
+    /// **Мінімальна довжина буфера (страйків) для live-перемикання** (default `4`).
     /// Коротші послідовності надто неоднозначні (діри покриття словника → хибний
     /// глухий кут) → live їх не чіпає; запобіжник precision (ризик #1 у дизайні).
+    /// **Калібровано** (`live_calibrate`): на in-dict словах FP≈0, на held-out
+    /// OpenSubtitles FP падає 0.26%→0.03% при 3→4, recall лишається 99.7%
+    /// (лов на 1 страйк пізніше) — чіткий precision-виграш.
     pub live_min_len: usize,
 }
 
@@ -237,7 +240,7 @@ impl Default for DetectorConfig {
             forex_enabled: true,
             capslock_fix_enabled: true,
             live_switch_enabled: false,
-            live_min_len: 3,
+            live_min_len: 4,
         }
     }
 }

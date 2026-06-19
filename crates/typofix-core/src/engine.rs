@@ -129,6 +129,16 @@ fn handle_boundary(
     if state.buffers.for_window(wkey).is_empty() {
         return Vec::new();
     }
+    // **Коротке замикання live-switch (ПЕРША лінія).** Якщо посеред слова вже був
+    // mid-word перенабір (`live_locked`), екран УЖЕ коректний: ОС допечатала решту
+    // слова в новій розкладці. Boundary-перенабір тут зробив би ПОДВОЄННЯ → лише
+    // скидаємо буфер (це знімає й пін) і виходимо. Друга лінія захисту —
+    // self-heal у detector (`best==current` → switch=false) — спрацювала б і так,
+    // але цей вихід дешевший і не залежить від словникового збігу всього слова.
+    if state.buffers.for_window(wkey).live_locked {
+        state.buffers.for_window(wkey).reset();
+        return Vec::new();
+    }
     // Клонуємо страйки, щоб звільнити позику буфера (далі чіпаємо learned/pending).
     let strokes: Vec<KeyStroke> = state.buffers.for_window(wkey).strokes().to_vec();
     let mut decision = detector::decide(&strokes, ctx);
@@ -146,6 +156,48 @@ fn handle_boundary(
     }
     state.buffers.for_window(wkey).reset();
     actions
+}
+
+/// Спроба перемикання НА ЛЬОТУ (mid-word) після `push` чергового страйка слова.
+///
+/// **Двосторонній гейт тримає detector** ([`detector::live_decide`]): прапорець
+/// `live_switch_enabled`, поточна мова — глухий кут (`!has_prefix && !recognizes`),
+/// інша — живий dict-префікс, `live_min_len`, veto, `best≠current`. Тут лише
+/// проводка: пін одного свічу на слово + learned-veto + мід-ворд перенабір.
+///
+/// **Когерентність буфера (НЕ скидаємо!):** після свічу лишаємо ті самі layout-
+/// незалежні `KeyStroke` — ОС тепер у новій розкладці друкує наступні фізичні
+/// клавіші правильно, і вони `push`-аться далі в той самий буфер. Межу
+/// (`handle_boundary`) коротко замикає `live_locked` → `reset` без зайвого
+/// перенабору (екран уже коректний).
+///
+/// **Undo — варіант Б:** `pending_retype` НЕ виставляємо (інакше Backspace завчив
+/// би ФРАГМЕНТ слова в learned). Backspace після live → звичайний `pop` страйка
+/// (слово лишається когерентним); жодного `learn()` на live.
+fn try_live_switch(state: &mut EngineState, wkey: &str, ctx: &Context) -> Vec<Action> {
+    // Рання відсіч ДО будь-якої алокації: у проді дефолт OFF, тож гарячий шлях
+    // (кожна літера) не має навіть копіювати страйки. `live_decide` все одно
+    // перевіряє цей прапорець, але тут — щоб не платити `to_vec()` дарма.
+    if !ctx.config.live_switch_enabled {
+        return Vec::new();
+    }
+    if state.buffers.for_window(wkey).live_locked {
+        return Vec::new(); // один свіч на слово
+    }
+    let strokes: Vec<KeyStroke> = state.buffers.for_window(wkey).strokes().to_vec();
+    let Some(decision) = detector::live_decide(&strokes, ctx) else {
+        return Vec::new();
+    };
+    // Самонавчений veto (як у `handle_boundary`): слово, яке користувач уже
+    // відкидав, не перемикаємо навіть на льоту.
+    if state.learned.contains(&decision.current_text) {
+        return Vec::new();
+    }
+    // Пін: у межах цього слова більше не перемикати; межа зробить `reset` без
+    // boundary-перенабору. Буфер НЕ чіпаємо — страйки лишаються когерентними.
+    state.buffers.for_window(wkey).live_locked = true;
+    // separator = None (межі ще не було, слово на екрані) — як `force_switch_last`.
+    replacer::plan(&decision, None)
 }
 
 /// Зібрати [`PendingRetype`] з рішення, що перемикає: рахує, скільки символів
@@ -262,7 +314,7 @@ pub fn step(state: &mut EngineState, ev: InputEvent, ctx: &Context) -> Vec<Actio
         }
         Class::Word => {
             state.buffers.for_window(&wkey).push(stroke);
-            Vec::new()
+            try_live_switch(state, &wkey, ctx)
         }
     }
 }

@@ -17,6 +17,13 @@ use crate::KeyStroke;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WordBuffer {
     strokes: Vec<KeyStroke>,
+    /// **Пін перемикання НА ЛЬОТУ:** після mid-word live-switch стає `true`, щоб у
+    /// межах ОДНОГО слова більше не перемикати (і щоб межа слова не зробила
+    /// зайвий boundary-перенабір — екран уже коректний, ОС допечатала решту в новій
+    /// розкладці). Скидається в [`reset`](Self::reset)/[`invalidate`](Self::invalidate),
+    /// тож межа/клік/фокус/каретка/Backspace-у-порожній/команда автоматично знімають
+    /// пін. `bool` не ламає `derive(PartialEq/Eq/Default)`.
+    pub live_locked: bool,
 }
 
 impl WordBuffer {
@@ -29,13 +36,24 @@ impl WordBuffer {
     /// завершення слова.
     pub fn reset(&mut self) {
         self.strokes.clear();
+        self.live_locked = false;
     }
 
     /// Стерти ОСТАННЄ натискання — синхронізація на Backspace всередині слова.
     /// Слово лишається когерентним (перенабір далі можливий). Повертає `true`,
     /// якщо було що стирати.
+    ///
+    /// **Готча (пін live-switch):** якщо `pop` СПОРОЖНИВ буфер — слова більше немає,
+    /// тож `live_locked` чистимо. Інакше пін пережив би слово: після backspace-до-
+    /// порожнього наступне слово хибно успадкувало б пін і `handle_boundary` тихо
+    /// придушив би його легітимний boundary-перенабір. Поки буфер НЕпорожній (pop
+    /// серед слова) — пін лишаємо (один свіч на слово; продовження через `push`).
     pub fn pop(&mut self) -> bool {
-        self.strokes.pop().is_some()
+        let popped = self.strokes.pop().is_some();
+        if self.strokes.is_empty() {
+            self.live_locked = false;
+        }
+        popped
     }
 
     /// **Інвалідувати** буфер: зв'язок із текстом перед курсором розірвано
@@ -44,6 +62,7 @@ impl WordBuffer {
     /// після цього перенабирати **не можна**.
     pub fn invalidate(&mut self) {
         self.strokes.clear();
+        self.live_locked = false;
     }
 
     /// Поточні натискання слова.
@@ -125,6 +144,29 @@ mod tests {
         assert!(b.pop());
         assert!(b.is_empty());
         assert!(!b.pop(), "поп порожнього → false");
+    }
+
+    #[test]
+    fn live_locked_clears_on_reset_and_invalidate() {
+        let mut b = WordBuffer::default();
+        assert!(!b.live_locked);
+        b.live_locked = true;
+        b.reset();
+        assert!(!b.live_locked, "reset знімає пін");
+        b.live_locked = true;
+        b.invalidate();
+        assert!(!b.live_locked, "invalidate знімає пін");
+        // pop СЕРЕД слова (буфер лишається непорожнім) НЕ знімає пін.
+        b.push(stroke(0x22));
+        b.push(stroke(0x23));
+        b.live_locked = true;
+        b.pop();
+        assert!(!b.is_empty());
+        assert!(b.live_locked, "pop серед слова не знімає пін");
+        // pop, що СПОРОЖНЮЄ буфер, знімає пін (слова більше немає → не переживає його).
+        b.pop();
+        assert!(b.is_empty());
+        assert!(!b.live_locked, "pop-до-порожнього знімає пін");
     }
 
     #[test]

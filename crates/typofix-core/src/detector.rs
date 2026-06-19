@@ -395,6 +395,40 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
         }
     }
 
+    // **Користувацьке примусове перемикання (UI «always_switch») — ЦІЛЬОВО-кейоване.**
+    // Користувач вписав ЦІЛЬОВЕ слово («ad»), а не його екранний двійник у чужій
+    // розкладці («фв»). Тому скануємо кандидатів `p.id != current_layout` і
+    // порівнюємо їхню ІНТЕРПРЕТАЦІЮ зі списком цілей (`is_force_switch_target`).
+    // ⚠️ НЕ плутати з `ctx.rules.forces` (поле `force`), яке кейоване на ПОТОЧНИЙ
+    // (екранний) текст — для UI-винятків воно НЕ спрацьовує (ціль ≠ те, що на
+    // екрані). Це явний намір користувача → форсимо ПЕРШИМ серед forced-сигналів,
+    // в обхід довжини/порогу/`min_switch_len`/short-word-гейтів, але НЕ в обхід
+    // veto і НЕ `best≠current` (коректно набране у власній розкладці не чіпаємо —
+    // фільтр `p.id != current_layout` гарантує best≠current при спрацюванні).
+    // Дзеркалить forex/extension target-side forcing.
+    let user_force = ctx
+        .languages
+        .iter()
+        .filter(|p| p.id != ctx.current_layout)
+        .find_map(|p| {
+            let text = p.layout.interpret(strokes);
+            if ctx.rules.is_force_switch_target(&text) {
+                let recognized = ctx.rules.recognizes(&text);
+                let sc = p.score(&text, cfg, recognized);
+                let is_dict = p.dict.contains(&text) || recognized;
+                Some((p.id.clone(), text, sc, is_dict))
+            } else {
+                None
+            }
+        });
+    let user_forced = user_force.is_some();
+    if let Some((lang, text, sc, is_dict)) = user_force {
+        best = lang;
+        best_text = text;
+        best_is_dict = is_dict;
+        best_score = sc;
+    }
+
     // **Forex: валютна пара в кандидатній (латинській) розкладці — сильний сигнал
     // «це англійське, перемикай на латиницю».** `is_currency_pair` пропускає лише
     // 6-літерний токен, де ОБИДВІ половини — валідні ISO-коди (EURUSD); кирилична
@@ -402,8 +436,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // безпечно. Фільтр `p.id != current_layout` лишає КОРЕКТНО набрану латиницею
     // пару недоторканою (best == current → не перемикаємо). Перемога forex форсить
     // перемикання в обхід порогу/довжини (але НЕ veto і НЕ best≠current).
-    let forex = cfg
-        .forex_enabled
+    let forex = (cfg.forex_enabled && !user_forced)
         .then(|| {
             ctx.languages
                 .iter()
@@ -433,7 +466,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // слова (`doc`/`log`/`go`), чий укр.-двійник міг би бути валідним, ламали б
     // легітимний ввід (гейт, НЕ список винятків). Фільтр `p.id != current_layout`
     // лишає коректно набране в EN недоторканим. Форсить в обхід порогу/довжини.
-    let extension = (cfg.extensions_enabled && !forex_forced && !current_is_dict)
+    let extension = (cfg.extensions_enabled && !user_forced && !forex_forced && !current_is_dict)
         .then(|| {
             ctx.languages
                 .iter()
@@ -463,6 +496,7 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     // precision: його LM має перевищувати LM (провального) укр. читання на запас —
     // інакше обидва боки сміття (нічого не форсимо). Форсить в обхід порогу/довжини.
     let phonotactic_forced = if cfg.phonotactics_enabled
+        && !user_forced
         && !forex_forced
         && !extension_forced
         && starts_impossible_uk(&current_text)
@@ -600,7 +634,8 @@ fn eval_branch(strokes: &[KeyStroke], ctx: &Context) -> BranchEval {
     let switch = current.is_some()
         && best != ctx.current_layout
         && !vetoed
-        && (forced
+        && (user_forced
+            || forced
             || standard_ok
             || short_word_switch
             || forex_forced
@@ -2350,6 +2385,101 @@ mod tests {
             !d.switch,
             "forex off → валютну пару не чіпати (conf={})",
             d.confidence
+        );
+    }
+
+    // --- Користувацьке ЦІЛЬОВО-кейоване примусове перемикання (UI always_switch) -
+    // Перевикористовуємо forex-профілі: e=0x12→у, u=0x16→г, r=0x13→к, s=0x1F→і,
+    // d=0x20→в. Короткий en-токен «us» (фіз [0x16,0x1F]) у UK показує «гі»; його
+    // НЕМА в en-словнику (forex_en_profile dict = euro/user) → без форсу при min=3
+    // не перемкнеться. Ключове: список кейовано на ЦІЛЬ «us», НЕ на екранне «гі».
+
+    fn force_switch_rules(targets: &[&str]) -> WordRules {
+        let mut r = WordRules::new();
+        for t in targets {
+            r.force_switch_word(t);
+        }
+        r
+    }
+
+    // «us» на фіз-клавішах: u s.
+    const US: [u32; 2] = [0x16, 0x1F];
+
+    #[test]
+    fn force_switch_short_target_bypasses_min_switch_len() {
+        // Рантаймовий min_switch_len=3 (дефолт src-tauri) ріже 2-літерні; цільове
+        // форсування МУСИТЬ перемкнути попри це.
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let rules = force_switch_rules(&["us"]);
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let ctx = ctx_with_config_rules(&langs, "uk", cfg, &rules);
+        let d = decide(&strokes(&US), &ctx);
+        assert_eq!(d.current_text, "гі");
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "us");
+        assert!(
+            d.switch,
+            "ціль 'us' має форснути перемикання (conf={})",
+            d.confidence
+        );
+    }
+
+    #[test]
+    fn force_switch_not_in_list_does_not_switch_at_min_3() {
+        // Причинність + precision-контроль (а): без цілі у списку «us» при min=3
+        // НЕ перемикається (нічого не регресуємо).
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let none = WordRules::new();
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let d = decide(
+            &strokes(&US),
+            &ctx_with_config_rules(&langs, "uk", cfg, &none),
+        );
+        assert!(!d.switch, "без force_switch 'us' при min=3 не перемикати");
+    }
+
+    #[test]
+    fn force_switch_target_respects_veto() {
+        // Precision-контроль (б): ціль і в always_switch, і в never_switch → veto
+        // переможе (veto має пріоритет над усіма forced-сигналами).
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let mut rules = force_switch_rules(&["us"]);
+        rules.veto_word("us");
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let d = decide(
+            &strokes(&US),
+            &ctx_with_config_rules(&langs, "uk", cfg, &rules),
+        );
+        assert!(!d.switch, "veto має перемогти force_switch");
+    }
+
+    #[test]
+    fn force_switch_keeps_correct_target_in_own_layout() {
+        // Precision-контроль (в): ціль КОРЕКТНО набрана у власній (en) розкладці →
+        // best==current → не чіпаємо (фільтр `p.id != current_layout`).
+        let langs = [forex_en_profile(), forex_uk_profile()];
+        let rules = force_switch_rules(&["us"]);
+        let cfg = DetectorConfig {
+            min_switch_len: 3,
+            ..DetectorConfig::default()
+        };
+        let d = decide(
+            &strokes(&US),
+            &ctx_with_config_rules(&langs, "en", cfg, &rules),
+        );
+        assert_eq!(d.current_text, "us");
+        assert!(
+            !d.switch,
+            "коректно набрану ціль у власній розкладці не чіпати"
         );
     }
 

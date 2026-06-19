@@ -52,6 +52,12 @@ recall — за сумніву НЕ перемикати.**
   **АБО** він у whitelist override (`uk.short.txt`, напр. `зі`≈1.78<2.0). Приклади:
   `oj`→`що`, `nj`→`то`, `nf`→`та`. Стереже:
   `mirror_*`/`frequent_short_uk_words_switch_without_whitelist`.
+- **Явні слова `always_switch` (UI) — перемикаються НЕЗАЛЕЖНО від довжини
+  (`force_switch`, target-side):** слова з UI-списку «завжди перемикати» форсуються
+  навіть 1–2-літерними, в обхід `min_switch_len`/порогу/short-word-гейтів (але НЕ
+  veto і НЕ `best≠current`). Кейовано на ЦІЛЬ (саме слово, напр. `ad`/`us`), НЕ на
+  екранний двійник. Стереже: `force_switch_*` (юніти `detector.rs`/`rules.rs`) +
+  `tests/recall_force_switch.rs` (реальні моделі, `min_switch_len=3`).
 
 **Канонічні eval-числа (headline; інші секції посилаються сюди):** реальний
 корпус, 383 прикл. → **precision 100% (FP=0), recall 99.4%, F1 99.7%**.
@@ -209,6 +215,35 @@ recall — за сумніву НЕ перемикати.**
 - **Проводка:** `iso4217.txt`→`load_iso4217` (див. канонічну проводку вище).
 - Стереже: юніти `forex_*` (герметичні) + `currency_pair_requires_both_halves_iso`
   (`rules.rs`) + `tests/recall_user_forex.rs` (реальні: обидва напрями пари).
+
+## Користувацьке примусове перемикання (UI `always_switch`) — `user_forced` (готча!)
+
+**Неочевидне.** UI-список «завжди перемикати» (`always_switch`) має форсувати слова
+НЕЗАЛЕЖНО від довжини (навіть 1–2 літери), які інакше ріже рантаймовий
+`min_switch_len`. Гілка `user_forced` в `eval_branch` — target-кейований forced-сигнал
+поряд із forex/extension/phonotactic.
+
+- **⚠️ ПАСТКА — `force` (`WordRules::forces`) КЕЙОВАНИЙ НА `current_text`** (екранний
+  текст = кирилична каша для набраного в чужій розкладці, напр. `фв` для `ad`). Тому
+  для UI-винятків `forces` НЕ спрацьовує: користувач вписує ЦІЛЬОВЕ слово (`ad`), а
+  не його двійник (`фв`). Наївний фікс (перевикористати `force`, або
+  `recognize_word`→`force_word`) НЕ працює. Тому окреме **target-кейоване**
+  `force_switch` (`force_switch_word`/`is_force_switch_target`).
+- **Механізм:** сканує кандидатів `p.id != current_layout`; якщо їхня
+  ІНТЕРПРЕТАЦІЯ ∈ `is_force_switch_target` → форсує `best`=цей кандидат і
+  `user_forced=true`. **Пріоритет — ПЕРШИЙ серед forced-сигналів** (явний намір
+  користувача): у фінальному OR `user_forced || forced || standard_ok || …`, а
+  порядок forcing-сканів user → forex → extension → phonotactic (кожен наступний
+  гейтований `!user_forced`).
+- **Обходить:** довжину/поріг/`min_switch_len`/short-word-гейти. **НЕ обходить:**
+  veto (`never_switch` переважає!) і `best != current_layout` (коректно набране у
+  власній розкладці не чіпаємо — фільтр `p.id != current_layout`).
+- **Проводка:** `runtime.rs::load_word_rules` — для `always_switch` І
+  `recognize_word` (dict-бонус для довгих не шкодить), І `force_switch_word`.
+- **Eval сліпий** (не знає про user.txt/force_switch) → числа незмінні (headline).
+  Стереже: юніти `force_switch_*` (`detector.rs` + `rules.rs`) +
+  `tests/recall_force_switch.rs` (реальні моделі, `min_switch_len=3`: 2-літерна та
+  1-літерна цілі форсяться; контролі — не-в-списку/veto/коректне-у-власній не чіпаються).
 
 ## Фонотактика укр. + файлові розширення — два сигнали A1 (готча!)
 

@@ -189,6 +189,13 @@ pub fn load_word_rules(pair: LanguagePair, data_dir: Option<&Path>, words: &Word
     // `WordRules` усе одно матчить регістронезалежно.
     for w in &words.always_switch {
         rules.recognize_word(w);
+        // Цільово-кейоване ПРИМУСОВЕ перемикання: на відміну від recognize_word
+        // (лише dict-бонус, який гейти довжини ріжуть для 1–2-літерних), force_switch
+        // форсує перемикання НЕЗАЛЕЖНО від довжини/порогу — явні слова зі списку
+        // «always_switch» перемикаються навіть короткими. Кейовано на ЦІЛЬ (саме
+        // слово), тож працює при набраному в чужій розкладці. Деталі —
+        // crates/typofix-core/CLAUDE.md (секція user_forced).
+        rules.force_switch_word(w);
     }
     for w in &words.never_switch {
         rules.veto_word(w);

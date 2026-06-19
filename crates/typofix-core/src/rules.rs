@@ -16,6 +16,15 @@ pub struct WordRules {
     veto: Vec<String>,
     /// Слова (поточний текст), які перемикати завжди — в обхід порогу/довжини.
     force: Vec<String>,
+    /// **Слова-ЦІЛІ примусового перемикання** (UI-список «always_switch»): на
+    /// відміну від [`force`] (кейований на ПОТОЧНИЙ текст = кирилична каша для
+    /// набраного в чужій розкладці), цей список кейовано на ЦІЛЬОВУ інтерпретацію
+    /// кандидата — рівно те слово, що користувач вписав («ad», а не його екранний
+    /// двійник «фв»). Детектор сканує кандидатів `p.id != current_layout`; якщо
+    /// інтерпретація ∈ цей список → форсує перемикання НЕЗАЛЕЖНО від довжини/порогу
+    /// (навіть 1–2 літери), але НЕ в обхід veto і НЕ `best≠current`. Дзеркалить
+    /// forex/extension target-side forcing. Порожній → сигнал вимкнено.
+    force_switch: Vec<String>,
     /// **Курований whitelist коротких СЛУЖБОВИХ слів**, per-language
     /// (`(LayoutId, lowercase-слово)`). Це НЕ veto/force, а МЕМБЕРШИП-сигнал
     /// «цей короткий кандидат — справжнє службове слово мови» для дзеркальної
@@ -56,6 +65,7 @@ impl WordRules {
         Self {
             veto: Vec::new(),
             force: Vec::new(),
+            force_switch: Vec::new(),
             short_service: Vec::new(),
             recognized: Vec::new(),
             currency_codes: Vec::new(),
@@ -94,6 +104,25 @@ impl WordRules {
         }
         let cur = current_text.to_lowercase();
         self.force.iter().any(|w| w == &cur)
+    }
+
+    /// Додати слово-ЦІЛЬ примусового перемикання (регістронезалежно). Кейовано на
+    /// ЦІЛЬОВУ інтерпретацію кандидата (саме слово зі списку UI), НЕ на поточний
+    /// екранний текст — див. [`force_switch`](Self::force_switch).
+    pub fn force_switch_word(&mut self, word: &str) -> &mut Self {
+        self.force_switch.push(word.to_lowercase());
+        self
+    }
+
+    /// Чи `word` — ЦІЛЬ примусового перемикання (регістронезалежно). Споживає
+    /// детектор: якщо інтерпретація кандидата (`p.id != current_layout`) у цьому
+    /// списку — форсує перемикання в обхід довжини/порогу (але НЕ veto/`best≠current`).
+    pub fn is_force_switch_target(&self, word: &str) -> bool {
+        if self.force_switch.is_empty() {
+            return false;
+        }
+        let w = word.to_lowercase();
+        self.force_switch.iter().any(|x| x == &w)
     }
 
     /// Додати слово у whitelist коротких службових слів мови `lang`
@@ -181,6 +210,7 @@ impl WordRules {
     pub fn is_empty(&self) -> bool {
         self.veto.is_empty()
             && self.force.is_empty()
+            && self.force_switch.is_empty()
             && self.short_service.is_empty()
             && self.recognized.is_empty()
             && self.currency_codes.is_empty()
@@ -214,6 +244,20 @@ mod tests {
         r.force_word("ghbdsn");
         assert!(r.forces("GHBDSN"));
         assert!(!r.forces("world"));
+    }
+
+    #[test]
+    fn force_switch_targets_are_case_insensitive_and_separate_from_force() {
+        let mut r = WordRules::new();
+        assert!(!r.is_force_switch_target("ad")); // порожній → нічого
+        r.force_switch_word("Ad");
+        assert!(r.is_force_switch_target("ad")); // регістронезалежно
+        assert!(r.is_force_switch_target("AD"));
+        assert!(!r.is_force_switch_target("ok"));
+        // Кейовано на ЦІЛЬ, НЕ на поточний (екранний) текст: `forces` лишається порожнім.
+        assert!(!r.forces("ad"));
+        assert!(!r.forces("фв")); // екранний двійник — теж ні
+        assert!(!r.is_empty());
     }
 
     #[test]

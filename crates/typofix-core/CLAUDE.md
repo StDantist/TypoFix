@@ -269,6 +269,37 @@ recall — за сумніву НЕ перемикати.**
 не-Down, auto-repeat/командні, Backspace) спрацьовують ДО гілки Word → live
 недосяжний у полі пароля/виключеному/на auto-repeat; окремо НЕ гейтуємо.
 
+- **⚠️ FORCE-TARGET (UI «always_switch») ОБХОДИТЬ `live_min_len` І dead-end-гейт.**
+  `live_decide` ПЕРШИМ ділом (до min_len/dead-end) сканує кандидатів `p.id !=
+  current_layout`; якщо інтерпретація ∈ `is_force_switch_target` → перемикає за
+  БУДЬ-ЯКОЇ довжини, навіть якщо поточна мова ще живий префікс (користувач свідомо
+  додав ціль → ризику нема). Поважає veto і `best != current` (фільтр). Дзеркалить
+  target-side `user_forced` у `eval_branch`. Стереже
+  `force_switch_target_live_switches_below_min_len` (+ контроль `non_force_*`).
+- **⚠️ LIVE проганяє `apply_caps_fix` (як boundary).** `try_live_switch` після
+  `live_decide` пропускає Decision через `detector::apply_caps_fix(decision, ctx)`
+  ПЕРЕД `replacer::plan` — інакше `GHbdsn`→`ПРивіт` лишав би перетриманий Shift.
+  Combined layout+caps гілка нормалізує `best_text` у мові `best` (`СВіт`→`Світ`),
+  гейти `case_fix_enabled`/`capslock_fix_enabled` + словниковий замок поважаються.
+  Спрацьовує, коли свіч припав на ПОВНЕ слово (`СВіт`@4). Стереже
+  `live_switch_normalizes_overheld_shift_case` (+ ALL-CAPS контроль
+  `live_switch_does_not_recase_all_caps`).
+- **⚠️ CAPS ДОВГОГО live-слова — на МЕЖІ, не на префіксі (Фікс 3).** Коли свіч
+  припав на ПРЕФІКС (`live_min_len` < довжини, напр. `ПРив`@4 від `привіт`),
+  `apply_caps_fix` у `try_live_switch` НЕ нормалізує (словниковий замок: префікс —
+  не слово; precision-first). Тому `handle_boundary` при `live_locked` НЕ робить
+  повне коротке замикання «reset+[]», а спершу **точково** проганяє caps-корекцію
+  на ПОВНОМУ дописаному слові: інтерпретація буфера в ПОТОЧНІЙ (уже правильній)
+  розкладці = повне слово (`ПРивіт`) → нейтральне `switch=false`-`Decision` через
+  `apply_caps_fix` → standalone caps-гілка дає **`caps_only`** корекцію
+  (`replacer::plan` НЕ емітить `SwitchLayout`) → `Привіт `. **ЖОДНОГО повторного
+  layout-перемикання** (точковий шлях, не повний `decide` — гарантія проти 2-го
+  свічу/подвоєння). Нема caps-помилки (мале `advance`/ALL-CAPS `ПРИВІТ`/не
+  словникове) → `switch=false` → `[]` (як раніше); learned-veto поважається; пін
+  скидається в усіх гілках. Стереже `live_switch_caps_corrected_at_boundary_full_word`
+  (+ контролі `live_switch_all_caps_long_word_not_recased_at_boundary`,
+  `word_continues_coherently_after_live_switch`, `pin_cleared_*`).
+
 - **⚠️ БУФЕР НЕ СКИДАЄМО після live-switch (когерентність).** Лишаємо ті самі
   layout-незалежні `KeyStroke`. ОС тепер у новій розкладці друкує наступні фізичні
   клавіші правильно, і вони `push`-аться далі в ТОЙ САМИЙ буфер (слово лишається

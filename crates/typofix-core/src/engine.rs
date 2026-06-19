@@ -129,15 +129,48 @@ fn handle_boundary(
     if state.buffers.for_window(wkey).is_empty() {
         return Vec::new();
     }
-    // **Коротке замикання live-switch (ПЕРША лінія).** Якщо посеред слова вже був
-    // mid-word перенабір (`live_locked`), екран УЖЕ коректний: ОС допечатала решту
-    // слова в новій розкладці. Boundary-перенабір тут зробив би ПОДВОЄННЯ → лише
-    // скидаємо буфер (це знімає й пін) і виходимо. Друга лінія захисту —
-    // self-heal у detector (`best==current` → switch=false) — спрацювала б і так,
-    // але цей вихід дешевший і не залежить від словникового збігу всього слова.
+    // **Коротке замикання live-switch (ПЕРША лінія) + boundary caps-корекція.** Якщо
+    // посеред слова вже був mid-word перенабір (`live_locked`), РОЗКЛАДКА вже коректна
+    // (ОС допечатала решту слова в новій розкладці) → повторний LAYOUT-перенабір зробив
+    // би ПОДВОЄННЯ, тому його НЕ робимо. АЛЕ якщо live-свіч припав на ПРЕФІКС
+    // (`live_min_len` < довжини), перетриманий Shift лишився б у дописаному слові
+    // (`ПРивіт`). На межі буфер тримає ті самі страйки, інтерпретація в ПОТОЧНІЙ
+    // (уже правильній) розкладці = ПОВНЕ слово → `apply_caps_fix` ловить caps-помилку
+    // зі словниковим замком (повне слово, не префікс) і дає **caps_only** корекцію
+    // (БЕЗ `SwitchLayout` — `replacer::plan` не емітить його для `caps_only`). Точковий
+    // шлях (не повний `decide`) гарантує НУЛЬ повторних перемикань розкладки.
     if state.buffers.for_window(wkey).live_locked {
-        state.buffers.for_window(wkey).reset();
-        return Vec::new();
+        let strokes: Vec<KeyStroke> = state.buffers.for_window(wkey).strokes().to_vec();
+        state.buffers.for_window(wkey).reset(); // знімає пін
+        let Some(current) = ctx.current_profile() else {
+            return Vec::new();
+        };
+        let current_text = current.layout.interpret(&strokes);
+        // Нейтральне switch=false-рішення; standalone caps-гілка `apply_caps_fix`
+        // нормалізує РЕГІСТР у поточній мові (`caps_only=true`) або лишає switch=false.
+        let probe = crate::detector::Decision {
+            best: ctx.current_layout.clone(),
+            best_text: current_text.clone(),
+            current_text,
+            switch: false,
+            confidence: 0.0,
+            suffix: String::new(),
+            caps_only: false,
+        };
+        let decision = detector::apply_caps_fix(probe, ctx);
+        // Нема caps-помилки (мале/ALL-CAPS/не словникове) → жодних дій (як раніше).
+        if !decision.switch {
+            return Vec::new();
+        }
+        // learned-veto (як на звичайній межі): слово, яке користувач уже відкидав,
+        // не чіпаємо навіть під caps-корекцію.
+        if state.learned.contains(&decision.current_text) {
+            return Vec::new();
+        }
+        let actions = replacer::plan(&decision, separator);
+        // caps_only → restore_layout=None: відкат через revert_last не міняє розкладку.
+        state.pending_retype = Some(build_pending(wkey, &decision, separator, ctx));
+        return actions;
     }
     // Клонуємо страйки, щоб звільнити позику буфера (далі чіпаємо learned/pending).
     let strokes: Vec<KeyStroke> = state.buffers.for_window(wkey).strokes().to_vec();
@@ -188,6 +221,12 @@ fn try_live_switch(state: &mut EngineState, wkey: &str, ctx: &Context) -> Vec<Ac
     let Some(decision) = detector::live_decide(&strokes, ctx) else {
         return Vec::new();
     };
+    // ФІКС 2: live-перенабір проганяємо через ТУ САМУ корекцію регістру, що й boundary
+    // (`apply_caps_fix`) — інакше `GHbdsn`→`ПРивіт` лишав би перетриманий Shift у
+    // `best_text`. Combined layout+caps гілка нормалізує `best_text` у мові `best`
+    // (`СВіт`→`Світ`), гейти `case_fix_enabled`/`capslock_fix_enabled` + словниковий
+    // замок поважаються. Жодного дублювання логіки.
+    let decision = detector::apply_caps_fix(decision, ctx);
     // Самонавчений veto (як у `handle_boundary`): слово, яке користувач уже
     // відкидав, не перемикаємо навіть на льоту.
     if state.learned.contains(&decision.current_text) {

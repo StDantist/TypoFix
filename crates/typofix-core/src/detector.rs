@@ -783,7 +783,19 @@ fn capslock_fix(word: &str, current: &LanguageProfile) -> Option<String> {
 /// шляху `best_text` і так dict-hit). Інакше (немає layout-switch): слово вже в
 /// правильній мові, і якщо регістр має патерн евристики, перетворюємо рішення на
 /// чисту caps-корекцію (`caps_only`).
-fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
+/// Накласти корекцію регістру на `Decision` (overheld-shift / capslock), переюзно
+/// для boundary ([`decide`]) і для **live-шляху** (`engine::try_live_switch`).
+///
+/// При `switch==true` нормалізує РЕГІСТР `best_text` у мові `best` (combined
+/// layout+caps: `СВіт`→`Світ`), не чіпаючи факт layout-switch; гейтиться
+/// `case_fix_enabled`/`capslock_fix_enabled` + словниковий замок (нормалізуємо лише
+/// якщо результат — реальне слово мови `best`) + veto. При `switch==false` —
+/// standalone caps-корекція (та сама розкладка, `caps_only=true`).
+///
+/// ⚠️ На live-шляху `best_text` може бути ПРЕФІКСОМ слова (свіч ловить мід-ворд):
+/// словниковий замок тоді свідомо НЕ нормалізує (префікс — не слово) → caps-фікс
+/// діє лише коли свіч припав на повне слово (`live_min_len`==довжина слова тощо).
+pub fn apply_caps_fix(mut d: Decision, ctx: &Context) -> Decision {
     let cfg = &ctx.config;
 
     // Комбінований layout+caps: нормалізуємо РЕГІСТР `best_text` (у МОВІ best), але
@@ -895,12 +907,17 @@ pub fn force_decision(strokes: &[KeyStroke], ctx: &Context) -> Option<Decision> 
 /// Кроки (усі мусять виконатись, інакше `None`):
 /// 1. прапорець `live_switch_enabled` увімкнено;
 /// 2. є поточний профіль розкладки (як [`force_decision`]);
-/// 3. довжина буфера `>= live_min_len` (коротші надто неоднозначні);
-/// 4. **глухий кут поточної:** інтерпретація в активній розкладці БІЛЬШЕ не префікс
+/// 3. **ВИНЯТОК — force-target (UI «always_switch») обходить усе нижче:** якщо
+///    інтерпретація якогось кандидата `p.id != current_layout` ∈
+///    `is_force_switch_target`, перемикаємо НЕЗАЛЕЖНО від `live_min_len` і БЕЗ
+///    вимоги dead-end/live-prefix (користувач свідомо додав ціль → ризику немає).
+///    Поважаємо veto і `best != current` (фільтр `p.id != current_layout`);
+/// 4. довжина буфера `>= live_min_len` (коротші надто неоднозначні);
+/// 5. **глухий кут поточної:** інтерпретація в активній розкладці БІЛЬШЕ не префікс
 ///    жодного слова (`!dict.has_prefix`) І не визнане user-слово (`!recognizes`);
-/// 5. **жива інша:** серед інших мов є кандидат із живим dict-префіксом; кілька →
+/// 6. **жива інша:** серед інших мов є кандидат із живим dict-префіксом; кілька →
 ///    max за LM (як фонотактичний шлях);
-/// 6. veto не забороняє (precision-замок і тут).
+/// 7. veto не забороняє (precision-замок і тут).
 ///
 /// Форма `Decision` дзеркалить [`force_decision`] (`switch=true`, `confidence=0.0`,
 /// без суфікса/caps) — рішення категоричне, а не балове. Окремий шлях: наявний
@@ -911,10 +928,40 @@ pub fn live_decide(strokes: &[KeyStroke], ctx: &Context) -> Option<Decision> {
         return None;
     }
     let current = ctx.current_profile()?;
+    let current_text = current.layout.interpret(strokes);
+
+    // **ФІКС 1 — force-target обходить live_min_len і dead-end-гейт.** Слово зі списку
+    // «завжди перемикати» (`is_force_switch_target`, target-кейоване) користувач свідомо
+    // позначив → перемикаємо мід-ворд за БУДЬ-ЯКОЇ довжини, навіть якщо поточна мова ще
+    // живий префікс. Дзеркалить target-side forcing у `eval_branch` (`user_forced`).
+    // Поважаємо veto і `best != current` (фільтр `p.id != current_layout`).
+    if let Some((best, best_text)) = ctx
+        .languages
+        .iter()
+        .filter(|p| p.id != ctx.current_layout)
+        .find_map(|p| {
+            let text = p.layout.interpret(strokes);
+            ctx.rules
+                .is_force_switch_target(&text)
+                .then_some((p.id.clone(), text))
+        })
+    {
+        if !ctx.rules.vetoes(&current_text, &best_text) {
+            return Some(Decision {
+                best,
+                best_text,
+                current_text,
+                switch: true,
+                confidence: 0.0,
+                suffix: String::new(),
+                caps_only: false,
+            });
+        }
+    }
+
     if strokes.len() < cfg.live_min_len {
         return None;
     }
-    let current_text = current.layout.interpret(strokes);
     // Глухий кут поточної мови: ні живий dict-префікс, ні визнане user-слово
     // (`recognizes` — повний збіг, тримає user.txt важливим запобіжником діри #1).
     // Якщо ще живий префікс → рано перемикати (чекаємо далі).

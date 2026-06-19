@@ -20,16 +20,20 @@ use typofix_platform_virtual::{drive, VirtualPlatform};
 
 static NO_EXCL: ExclusionRules = ExclusionRules::new();
 
-fn key(scancode: u32) -> InputEvent {
+fn key_mod(scancode: u32, modifiers: Modifiers) -> InputEvent {
     InputEvent::Key(KeyEvent {
         scancode,
         vk: 0,
         dir: KeyDir::Down,
-        modifiers: Modifiers::empty(),
+        modifiers,
         timestamp_ms: 0,
         is_synthetic: false,
         is_autorepeat: false,
     })
+}
+
+fn key(scancode: u32) -> InputEvent {
+    key_mod(scancode, Modifiers::empty())
 }
 
 /// Профіль із реальною embedded-розкладкою + sample LM + КАСТРОВАНИМ словником.
@@ -53,11 +57,16 @@ fn langs() -> [LanguageProfile; 2] {
 }
 
 /// Конфіг із увімкненим live-switch і `live_min_len=2` (тести оперують 2-літерними
-/// прикладами; дефолт у проді — 3, OFF).
+/// прикладами; дефолт у проді — 4, OFF).
 fn live_cfg() -> DetectorConfig {
+    live_cfg_n(2)
+}
+
+/// Конфіг live ON із заданим `live_min_len` (для тестів обходу порога / повного слова).
+fn live_cfg_n(min_len: usize) -> DetectorConfig {
     DetectorConfig {
         live_switch_enabled: true,
-        live_min_len: 2,
+        live_min_len: min_len,
         ..DetectorConfig::default()
     }
 }
@@ -101,6 +110,12 @@ const Z: u32 = 0x2C;
 const S: u32 = 0x1F;
 const SPACE: u32 = 0x39;
 const BACKSPACE: u32 = 0x0E;
+const SHIFT: Modifiers = Modifiers::SHIFT;
+// Для слова «привіт»: п=0x22 р=0x23 и=0x30 в=0x20 і=0x1F т=0x31
+// (en-двійники: g h b d s n). uk-двійники з SHIFT: П Р И В.
+const G: u32 = 0x22;
+const H: u32 = 0x23;
+const B: u32 = 0x30;
 
 /// Трійка дій мід-ворд live-switch uk→en для «фв»→«ad».
 fn ad_switch() -> [Action; 3] {
@@ -546,4 +561,287 @@ fn both_languages_dead_end_longer_word_no_action() {
         platform.applied_actions()
     );
     assert_eq!(platform.text(), "yxzyx");
+}
+
+// ── ФІКС 1: force-target (UI «always_switch») перемикає на льоту за будь-якої довжини ──
+
+#[test]
+fn force_switch_target_live_switches_below_min_len() {
+    // `ad` (екран `фв`, 2 страйки) при `live_min_len=4` загальним гейтом НЕ
+    // спрацював би (закоротко). Але `ad` у списку «завжди перемикати» → force-target
+    // обходить `live_min_len` і dead-end-гейт → перемикає мід-ворд уже на 2-му страйку.
+    let langs = langs();
+    let mut state = EngineState::default();
+    let mut rules = WordRules::new();
+    rules.force_switch_word("ad");
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("uk"));
+    platform.set_text("фв");
+    platform.enqueue_all([key(A), key(D)]);
+
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &rules,
+        &NO_EXCL,
+    );
+
+    assert_eq!(
+        platform.applied_actions(),
+        ad_switch(),
+        "force-target має перемкнути мід-ворд попри live_min_len=4"
+    );
+    assert_eq!(platform.text(), "ad");
+    assert_eq!(platform.current_layout(), LayoutId::new("en"));
+}
+
+#[test]
+fn non_force_short_word_does_not_live_switch_below_min_len() {
+    // Контроль причинності: те саме `ad`/`фв`, але БЕЗ force-списку → загальний гейт
+    // (`live_min_len=4`, 2 страйки) не пускає → жодної дії до межі.
+    let langs = langs();
+    let mut state = EngineState::default();
+    let no_rules = WordRules::new();
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("uk"));
+    platform.set_text("фв");
+    platform.enqueue_all([key(A), key(D)]);
+
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    assert!(
+        platform.applied_actions().is_empty(),
+        "без force-списку 2-літерне нижче live_min_len не перемикається (actions={:?})",
+        platform.applied_actions()
+    );
+    assert_eq!(platform.text(), "фв");
+}
+
+// ── ФІКС 2: live-перенабір проганяє корекцію регістру (overheld Shift) ──
+
+#[test]
+fn live_switch_normalizes_overheld_shift_case() {
+    // en активна, перетриманий Shift на перших двох → екран `CDsn` (страйки C,D — Shift;
+    // S,N — малі). uk-двійник — повне слово `світ` із зайвим капсом `СВіт`. Live (повне
+    // слово на `live_min_len=4`) перемикає en→uk, а apply_caps_fix нормалізує РЕГІСТР:
+    // `СВіт`→`Світ` (а НЕ `СВіт`). Дзеркалить boundary combined layout+caps.
+    let langs = langs();
+    let mut state = EngineState::default();
+    let no_rules = WordRules::new();
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("CDsn"); // en-крякозябри з касою, що ОС уже надрукувала
+    platform.enqueue_all([key_mod(C, SHIFT), key_mod(D, SHIFT), key(S), key(N)]);
+
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            Action::DeleteChars(4),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("Світ".into()),
+        ],
+        "live має дати нормалізований регістр `Світ`, не `СВіт`"
+    );
+    assert_eq!(platform.text(), "Світ");
+    assert_eq!(platform.current_layout(), LayoutId::new("uk"));
+}
+
+#[test]
+fn live_switch_does_not_recase_all_caps() {
+    // Контроль: ALL-CAPS (`СВІТ`, усі великі) — навмисний капс/акронім. overheld/capslock
+    // патерни його НЕ чіпають (немає малих) → live перемикає, але РЕГІСТР лишається
+    // `СВІТ`, не псується.
+    let langs = langs();
+    let mut state = EngineState::default();
+    let no_rules = WordRules::new();
+
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("CDSN"); // усі 4 великі
+    platform.enqueue_all([
+        key_mod(C, SHIFT),
+        key_mod(D, SHIFT),
+        key_mod(S, SHIFT),
+        key_mod(N, SHIFT),
+    ]);
+
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            Action::DeleteChars(4),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("СВІТ".into()),
+        ],
+        "ALL-CAPS не має хибно перекапіталізуватись (лишається `СВІТ`)"
+    );
+    assert_eq!(platform.text(), "СВІТ");
+}
+
+// ── ФІКС 3: caps-корекція live-перемкнутого ДОВГОГО слова — на МЕЖІ (повне слово) ──
+
+#[test]
+fn live_switch_caps_corrected_at_boundary_full_word() {
+    // РЕАЛЬНИЙ репро власника: `GHbdsn`→`привіт` (6 літер), перетриманий Shift на
+    // перших двох. en активна. live_min_len=4 → live-свіч припадає на ПРЕФІКС `ПРив`
+    // (4 страйки), де словниковий замок apply_caps_fix не нормалізує (префікс — не
+    // слово). Слово дописується до `ПРивіт`, на МЕЖІ (пробіл) boundary-caps корекція
+    // нормалізує ПОВНЕ слово → `Привіт ` (БЕЗ повторного перемикання розкладки).
+    let langs = langs();
+    let mut state = EngineState::default();
+    let no_rules = WordRules::new();
+
+    // Фаза A: екран `GHbd` (ОС у en надрукувала); після `d` (4-й страйк) live-свіч
+    // на префіксі → стерти 4, перемкнути на uk, набрати `ПРив` (ще з касою).
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("GHbd");
+    platform.enqueue_all([key_mod(G, SHIFT), key_mod(H, SHIFT), key(B), key(D)]);
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+    assert_eq!(
+        platform.text(),
+        "ПРив",
+        "після live-свічу на префіксі екран — `ПРив` (каса ще не виправлена)"
+    );
+    assert_eq!(platform.current_layout(), LayoutId::new("uk"));
+
+    // Фаза B: ОС (уже в uk) допечатала `іт` → екран `ПРивіт`. Live locked → жодних дій.
+    platform.set_text("ПРивіт");
+    platform.enqueue_all([key(S), key(N)]);
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    // Фаза C: ОС надрукувала пробіл → екран `ПРивіт `. Межа → boundary-caps корекція.
+    platform.set_text("ПРивіт ");
+    platform.enqueue_all([key(SPACE)]);
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    assert_eq!(
+        platform.text(),
+        "Привіт ",
+        "на межі регістр виправлено на ПОВНОМУ слові → `Привіт `, не `ПРивіт `"
+    );
+    assert_eq!(
+        platform.current_layout(),
+        LayoutId::new("uk"),
+        "розкладка лишилась uk (жодного повторного перемикання)"
+    );
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            // Фаза A — live-свіч на префіксі.
+            Action::DeleteChars(4),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("ПРив".into()),
+            // Фаза C — boundary caps-корекція (caps_only: БЕЗ SwitchLayout), слово+пробіл.
+            Action::DeleteChars(7),
+            Action::TypeUnicode("Привіт ".into()),
+        ],
+        "очікуємо live-свіч + лише caps-корекцію на межі (жодного 2-го SwitchLayout)"
+    );
+}
+
+#[test]
+fn live_switch_all_caps_long_word_not_recased_at_boundary() {
+    // Контроль: live-перемкнуте ALL-CAPS слово (`ПРИВІТ`, усі великі — навмисний капс)
+    // на межі НЕ дістає caps-корекції (немає малих → не патерн overheld/capslock).
+    let langs = langs();
+    let mut state = EngineState::default();
+    let no_rules = WordRules::new();
+
+    // Фаза A: усі великі. en `GHBD` → live-свіч на префіксі `ПРИВ` (caps не чіпається).
+    let mut platform = VirtualPlatform::new();
+    platform.set_layout(LayoutId::new("en"));
+    platform.set_text("GHBD");
+    platform.enqueue_all([
+        key_mod(G, SHIFT),
+        key_mod(H, SHIFT),
+        key_mod(B, SHIFT),
+        key_mod(D, SHIFT),
+    ]);
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+    assert_eq!(platform.text(), "ПРИВ");
+
+    // Фаза B+C: допечатано `ІТ` + пробіл → `ПРИВІТ `. Межа → НІЯКОЇ caps-корекції.
+    platform.set_text("ПРИВІТ ");
+    platform.enqueue_all([key_mod(S, SHIFT), key_mod(N, SHIFT), key(SPACE)]);
+    run(
+        &mut platform,
+        &mut state,
+        &langs,
+        &live_cfg_n(4),
+        &no_rules,
+        &NO_EXCL,
+    );
+
+    assert_eq!(
+        platform.text(),
+        "ПРИВІТ ",
+        "ALL-CAPS на межі НЕ перекапіталізовується"
+    );
+    assert_eq!(
+        platform.applied_actions(),
+        [
+            Action::DeleteChars(4),
+            Action::SwitchLayout(LayoutId::new("uk")),
+            Action::TypeUnicode("ПРИВ".into()),
+        ],
+        "лише live-свіч префікса; на межі — ЖОДНОЇ нової дії"
+    );
 }

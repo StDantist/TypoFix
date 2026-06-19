@@ -143,6 +143,9 @@ const messages = {
     "behavior.phonotactics.hint": "неможливі для української сполуки (напр. ь на початку)",
     "behavior.fix_capslock": "Виправляти випадковий CapsLock",
     "behavior.fix_capslock.hint": "пРИВІТ → Привіт (ненавмисний CapsLock)",
+    "behavior.live_switch": "Перемикати під час друку (на льоту)",
+    "behavior.live_switch.hint":
+      "Перемикає розкладку ще ДО пробілу, щойно набрана послідовність неможлива в поточній мові (напр. «фв» → «ad»). Експериментальне: на рідкісних словах/іменах може спрацювати помилково.",
     // Чутливість (людський слайдер поверх порога впевненості)
     "behavior.sensitivity.title": "Чутливість",
     "behavior.sensitivity.cautious": "Обережно",

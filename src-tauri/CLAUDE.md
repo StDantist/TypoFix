@@ -65,13 +65,23 @@ npm --prefix ui install
   {process_names/exe_paths/folders}, **words {always_switch/never_switch}**, hotkeys,
   **behavior**, detection). Усі поля `#[serde(default)]` → старі/часткові файли
   читаються без падіння (forward/back-compat: старий settings.json без секції → дефолти).
-  `SCHEMA_VERSION` росте з кожною новою секцією: v2 додав `hotkeys`, v3 — `behavior`.
-- **Секція `behavior` (B4, перемикачі поведінки):** 5 bool-тогглів, **усі default `true`**
-  (= поточна повна поведінка детектора, тож відсутня секція нічого не змінює).
+  `SCHEMA_VERSION` росте з кожною новою секцією/полем: v2 додав `hotkeys`, v3 —
+  `behavior`, v4 — `feedback`, v5 — поле `behavior.live_switch`.
+- **Секція `behavior` (B4, перемикачі поведінки):** 6 bool-тогглів. **Евристики
+  (5) default `true`** (= поточна повна поведінка детектора, тож відсутня секція
+  нічого не змінює); **`live_switch` — default `false`** (експериментальна, див. нижче).
   Дзеркалять `*_enabled`-прапорці `DetectorConfig` 1:1 — мапінг у `detector_config_from`
   (`runtime.rs`): `fix_case`→`case_fix_enabled`, `forex`→`forex_enabled`,
   `recognize_extensions`→`extensions_enabled`, `phonotactics`→`phonotactics_enabled`,
-  `fix_capslock`→`capslock_fix_enabled`. UI — картка «Поведінка» (`Toggle` на кожен).
+  `fix_capslock`→`capslock_fix_enabled`, `live_switch`→`live_switch_enabled`.
+  ⚠️ **Готча:** `detector_config_from` будує `DetectorConfig` через `..base` (default),
+  у якому `live_switch_enabled=false` — тож КОЖЕН тогл мусить мати ЯВНИЙ рядок
+  присвоєння, інакше прапорець завжди лишиться дефолтним попри значення з UI.
+  UI — картка «Поведінка» (`Toggle` на кожен).
+  **`live_switch` (перемикання НА ЛЬОТУ, mid-word):** експериментальна — eval її не
+  бачить (годує цілі слова, оминаючи буфер) → default OFF, вмикається свідомо після
+  ручного живого калібрування. `live_min_len` (core, default 3) в UI поки НЕ виводимо.
+  Деталі — `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
   **Чутливість (людський повзунок):** окремого поля НЕ має — це перепрочитання
   наявного `detection.confidence_threshold`. UI-слайдер 0 (Обережно) → 100 (Агресивно)
   мапиться лінійно у поріг `[1.0 .. 0.5]` (`THR_CAUTIOUS`/`THR_AGGRESSIVE` у `App.svelte`):
@@ -103,7 +113,7 @@ npm --prefix ui install
   атомарний запис → оновлення стану/трею → `sync_runtime` (+`hotkeys::apply`, обидва
   no-op у e2e). Повертає нові settings (UI робить `applyLoaded` → форма = повернене,
   dirty скидається, статус «скинуто»).
-  - **СКИДАЄ до дефолтів:** `behavior` (5 тогглів), `detection` (`min_word_len` +
+  - **СКИДАЄ до дефолтів:** `behavior` (6 тогглів; `live_switch`→false), `detection` (`min_word_len` +
     `confidence_threshold` ⇒ і людський повзунок чутливості), `feedback`
     (`sound_on_switch`), `hotkeys` (прив'язки → дефолтні = всі вимкнені),
     `language` (→ `uk-en`).

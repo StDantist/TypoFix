@@ -21,9 +21,10 @@ use tauri::{AppHandle, Manager};
 pub const SETTINGS_FILE: &str = "settings.json";
 
 /// Поточна версія схеми конфігу (для майбутніх міграцій).
-/// v2 додав секцію `hotkeys`, v3 — `behavior`, v4 — `feedback` (бекворд-сумісно:
-/// відсутнє поле → дефолт через `serde(default)`).
-pub const SCHEMA_VERSION: u32 = 4;
+/// v2 додав секцію `hotkeys`, v3 — `behavior`, v4 — `feedback`, v5 — поле
+/// `behavior.live_switch` (бекворд-сумісно: відсутнє поле → дефолт через
+/// `serde(default)`).
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Мовна пара. Поки доступна лише uk↔en, але модель параметрична (enum) — щоб
 /// додати пару, треба ЛИШЕ дані + один варіант сюди (з його [`langs`](Self::langs)).
@@ -212,8 +213,9 @@ impl Default for DetectionDto {
 
 /// Перемикачі поведінки детектора (B4) — людські on/off для окремих евристик.
 /// Кожен дзеркалить відповідний `*_enabled`-прапорець `DetectorConfig`; мапінг —
-/// у [`crate::runtime::detector_config_from`]. **Усі default `true`** = поточна
-/// (повна) поведінка, тож старий `settings.json` без секції нічого не змінює.
+/// у [`crate::runtime::detector_config_from`]. **Евристики default `true`** =
+/// поточна (повна) поведінка, тож старий `settings.json` без секції нічого не
+/// змінює. ВИНЯТОК — `live_switch` (експериментальна, default `false`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BehaviorDto {
@@ -227,17 +229,23 @@ pub struct BehaviorDto {
     pub phonotactics: bool,
     /// Виправляти випадковий CapsLock. → `capslock_fix_enabled`.
     pub fix_capslock: bool,
+    /// Перемикання НА ЛЬОТУ (mid-word live switch). → `live_switch_enabled`.
+    /// **Default `false`** (експериментальна фіча; вмикається свідомо після ручного
+    /// калібрування — eval її не бачить). Деталі — `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
+    pub live_switch: bool,
 }
 
 impl Default for BehaviorDto {
     fn default() -> Self {
-        // Усе ввімкнено = поточна поведінка детектора (бек-сумісність).
+        // Евристики ввімкнено = поточна поведінка детектора (бек-сумісність).
         Self {
             fix_case: true,
             forex: true,
             recognize_extensions: true,
             phonotactics: true,
             fix_capslock: true,
+            // Експериментальна — за замовчуванням ВИМКНЕНА.
+            live_switch: false,
         }
     }
 }
@@ -539,6 +547,19 @@ mod tests {
         assert!(s.behavior.recognize_extensions);
         assert!(s.behavior.phonotactics);
         assert!(s.behavior.fix_capslock);
+        // live_switch — експериментальна, default ВИМКНЕНА (на відміну від евристик).
+        assert!(!s.behavior.live_switch);
+    }
+
+    #[test]
+    fn behavior_partial_keeps_live_switch_off_by_default() {
+        // Старий settings.json з behavior, але БЕЗ нового поля live_switch
+        // (міграція v4→v5) → live_switch лишається false, евристики читаються як є.
+        let partial = r#"{ "behavior": { "fix_case": false } }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        assert!(!s.behavior.fix_case);
+        assert!(s.behavior.forex); // решта евристик — дефолт true
+        assert!(!s.behavior.live_switch); // нове поле — дефолт false
     }
 
     #[test]

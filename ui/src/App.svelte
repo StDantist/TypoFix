@@ -28,7 +28,7 @@
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
     return {
-      version: 4,
+      version: 5,
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
@@ -39,6 +39,7 @@
         recognize_extensions: true,
         phonotactics: true,
         fix_capslock: true,
+        live_switch: false,
       },
       feedback: { sound_on_switch: false },
       hotkeys: {
@@ -63,6 +64,7 @@
     { key: "recognize_extensions", hint: "behavior.recognize_extensions.hint" },
     { key: "phonotactics", hint: "behavior.phonotactics.hint" },
     { key: "fix_capslock", hint: "behavior.fix_capslock.hint" },
+    { key: "live_switch", hint: "behavior.live_switch.hint" },
   ];
 
   /**

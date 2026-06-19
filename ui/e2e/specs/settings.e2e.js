@@ -49,13 +49,14 @@ describe("TypoFix — вікно налаштувань (UI-e2e)", () => {
     }
   });
 
-  it("картка «Поведінка»: 5 тогглів + повзунок чутливості наявні", async () => {
+  it("картка «Поведінка»: 6 тогглів + повзунок чутливості наявні", async () => {
     const keys = [
       "fix_case",
       "forex",
       "recognize_extensions",
       "phonotactics",
       "fix_capslock",
+      "live_switch",
     ];
     for (const k of keys) {
       const toggle = await tid(`behavior-${k}`);

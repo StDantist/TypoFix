@@ -36,6 +36,7 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {boolean} recognize_extensions
  * @property {boolean} phonotactics
  * @property {boolean} fix_capslock
+ * @property {boolean} live_switch
  *
  * @typedef {Object} Feedback
  * @property {boolean} sound_on_switch

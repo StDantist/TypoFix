@@ -68,7 +68,9 @@ pub fn exclusion_rules_from(settings: &AppSettings) -> ExclusionRules {
 /// **Перемикачі поведінки (B4)** — `BehaviorDto` → `*_enabled`-прапорці 1:1:
 /// `fix_case`→`case_fix_enabled`, `forex`→`forex_enabled`,
 /// `recognize_extensions`→`extensions_enabled`, `phonotactics`→`phonotactics_enabled`,
-/// `fix_capslock`→`capslock_fix_enabled`. Решта полів — з `DetectorConfig::default`.
+/// `fix_capslock`→`capslock_fix_enabled`, `live_switch`→`live_switch_enabled`
+/// (експериментальний, default off). Решта полів — з `DetectorConfig::default`
+/// (зокрема `live_min_len`, який в UI поки не виводимо).
 pub fn detector_config_from(settings: &AppSettings) -> DetectorConfig {
     let base = DetectorConfig::default();
     let conf = settings.detection.confidence_threshold.clamp(0.0, 1.0);
@@ -81,6 +83,9 @@ pub fn detector_config_from(settings: &AppSettings) -> DetectorConfig {
         extensions_enabled: b.recognize_extensions,
         phonotactics_enabled: b.phonotactics,
         capslock_fix_enabled: b.fix_capslock,
+        // Перемикання НА ЛЬОТУ (експериментальне, default off): прокидаємо явно,
+        // бо `..base` лишив би `live_switch_enabled = false` (дефолт core) попри тогл.
+        live_switch_enabled: b.live_switch,
         ..base
     }
 }
@@ -652,6 +657,7 @@ mod tests {
                 recognize_extensions: false,
                 phonotactics: false,
                 fix_capslock: false,
+                live_switch: true,
             },
             ..Default::default()
         };
@@ -661,8 +667,10 @@ mod tests {
         assert!(!cfg.extensions_enabled);
         assert!(!cfg.phonotactics_enabled);
         assert!(!cfg.capslock_fix_enabled);
+        // live_switch=true тут прокидається в live_switch_enabled (явний маппінг).
+        assert!(cfg.live_switch_enabled);
 
-        // Дефолти (усе true) → всі прапорці увімкнені (поточна поведінка).
+        // Дефолти: усі евристики true, АЛЕ live_switch default false (експериментальна).
         let on = detector_config_from(&AppSettings::default());
         assert!(
             on.case_fix_enabled
@@ -671,6 +679,7 @@ mod tests {
                 && on.phonotactics_enabled
                 && on.capslock_fix_enabled
         );
+        assert!(!on.live_switch_enabled);
     }
 
     #[test]

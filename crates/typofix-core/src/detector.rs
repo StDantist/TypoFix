@@ -201,6 +201,17 @@ pub struct DetectorConfig {
     /// на нормалізований (`Привіт`/`Hello`). Коли `false` — правило вимкнено.
     /// Див. [`capslock_fix`].
     pub capslock_fix_enabled: bool,
+    /// **Прапорець перемикання НА ЛЬОТУ** (mid-word live switch; default `false`).
+    /// Коли `true`, [`live_decide`] може перемкнути розкладку ПОСЕРЕД слова, щойно
+    /// набране стає глухим кутом у поточній мові, але живим префіксом в іншій
+    /// (`фв`→рано на `ad`). **Дефолт OFF:** нова поведінка, eval її НЕ бачить (годує
+    /// цілі слова, оминаючи буфер) → вмикати лише після ручного живого калібрування.
+    /// Деталі — `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
+    pub live_switch_enabled: bool,
+    /// **Мінімальна довжина буфера (страйків) для live-перемикання** (default `3`).
+    /// Коротші послідовності надто неоднозначні (діри покриття словника → хибний
+    /// глухий кут) → live їх не чіпає; запобіжник precision (ризик #1 у дизайні).
+    pub live_min_len: usize,
 }
 
 impl Default for DetectorConfig {
@@ -225,6 +236,8 @@ impl Default for DetectorConfig {
             case_fix_enabled: true,
             forex_enabled: true,
             capslock_fix_enabled: true,
+            live_switch_enabled: false,
+            live_min_len: 3,
         }
     }
 }
@@ -860,6 +873,68 @@ pub fn force_decision(strokes: &[KeyStroke], ctx: &Context) -> Option<Decision> 
         })
         .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(id, text, _)| (id, text))?;
+    Some(Decision {
+        best,
+        best_text,
+        current_text,
+        switch: true,
+        confidence: 0.0,
+        suffix: String::new(),
+        caps_only: false,
+    })
+}
+
+/// **Перемикання НА ЛЬОТУ (mid-word live switch).** ЧИСТА функція; рушій НЕ кличе
+/// її на цьому етапі (інтеграція — окремий етап). Повертає `Some(Decision)`, лише
+/// коли НА ПОТОЧНОМУ натиску набране стало **глухим кутом у поточній мові**, але
+/// лишається **живим префіксом в іншій** — двосторонній гейт (тримає precision).
+///
+/// Кроки (усі мусять виконатись, інакше `None`):
+/// 1. прапорець `live_switch_enabled` увімкнено;
+/// 2. є поточний профіль розкладки (як [`force_decision`]);
+/// 3. довжина буфера `>= live_min_len` (коротші надто неоднозначні);
+/// 4. **глухий кут поточної:** інтерпретація в активній розкладці БІЛЬШЕ не префікс
+///    жодного слова (`!dict.has_prefix`) І не визнане user-слово (`!recognizes`);
+/// 5. **жива інша:** серед інших мов є кандидат із живим dict-префіксом; кілька →
+///    max за LM (як фонотактичний шлях);
+/// 6. veto не забороняє (precision-замок і тут).
+///
+/// Форма `Decision` дзеркалить [`force_decision`] (`switch=true`, `confidence=0.0`,
+/// без суфікса/caps) — рішення категоричне, а не балове. Окремий шлях: наявний
+/// `starts_impossible_uk`/boundary-детектор НЕ зачіпається.
+pub fn live_decide(strokes: &[KeyStroke], ctx: &Context) -> Option<Decision> {
+    let cfg = &ctx.config;
+    if !cfg.live_switch_enabled {
+        return None;
+    }
+    let current = ctx.current_profile()?;
+    if strokes.len() < cfg.live_min_len {
+        return None;
+    }
+    let current_text = current.layout.interpret(strokes);
+    // Глухий кут поточної мови: ні живий dict-префікс, ні визнане user-слово
+    // (`recognizes` — повний збіг, тримає user.txt важливим запобіжником діри #1).
+    // Якщо ще живий префікс → рано перемикати (чекаємо далі).
+    if current.dict.has_prefix(&current_text) || ctx.rules.recognizes(&current_text) {
+        return None;
+    }
+    // Інша мова з ЖИВИМ префіксом; кілька кандидатів → max за LM (як phonotactic).
+    let (best, best_text) = ctx
+        .languages
+        .iter()
+        .filter(|p| p.id != ctx.current_layout)
+        .filter_map(|p| {
+            let text = p.layout.interpret(strokes);
+            p.dict
+                .has_prefix(&text)
+                .then(|| (p.id.clone(), text.clone(), p.lm.score(&text)))
+        })
+        .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(id, text, _)| (id, text))?;
+    // veto захищає precision і тут (звірка поточного й кандидата).
+    if ctx.rules.vetoes(&current_text, &best_text) {
+        return None;
+    }
     Some(Decision {
         best,
         best_text,
@@ -2481,6 +2556,121 @@ mod tests {
             !d.switch,
             "коректно набрану ціль у власній розкладці не чіпати"
         );
+    }
+
+    // --- live_decide: перемикання НА ЛЬОТУ (mid-word) — ЧИСТА, движок не кличе ---
+    // Фіз-позиції: a=0x1E, d=0x20. uk-двійники: ф, в. strokes[a,d] → en "ad", uk "фв".
+
+    fn live_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x1E, KeyCap::letter('a', 'A')),
+                (0x20, KeyCap::letter('d', 'D')),
+            ],
+        );
+        let lm = NgramModel::train("ad add advance order", 3, 0.5);
+        // "ad" — живий префікс (ad/add); "da"/"вф" — ні.
+        let dict = Dictionary::from_words(["ad", "add", "order"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn live_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x1E, KeyCap::letter('ф', 'Ф')),
+                (0x20, KeyCap::letter('в', 'В')),
+            ],
+        );
+        let lm = NgramModel::train("світ день вода", 3, 0.5);
+        // "фв"/"вф" — НЕ префікси жодного uk-слова (глухий кут).
+        let dict = Dictionary::from_words(["світ", "день", "вода"]).unwrap();
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm,
+            dict,
+            freq: None,
+        }
+    }
+
+    fn live_cfg(min_len: usize) -> DetectorConfig {
+        DetectorConfig {
+            live_switch_enabled: true,
+            live_min_len: min_len,
+            ..DetectorConfig::default()
+        }
+    }
+
+    const AD: [u32; 2] = [0x1E, 0x20]; // en "ad" / uk "фв"
+    const DA: [u32; 2] = [0x20, 0x1E]; // en "da" / uk "вф" — глухий кут в обох
+
+    #[test]
+    fn live_switches_dead_end_current_to_live_prefix_other() {
+        // uk-розкладка, набрано "фв" (глухий кут uk), "ad" — живий en-префікс → перемкнути.
+        let langs = [live_en_profile(), live_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_config_rules(&langs, "uk", live_cfg(2), &rules);
+        let d = live_decide(&strokes(&AD), &ctx).expect("має бути Some");
+        assert_eq!(d.current_text, "фв");
+        assert_eq!(d.best, LayoutId::new("en"));
+        assert_eq!(d.best_text, "ad");
+        assert!(d.switch);
+        assert!(!d.caps_only);
+        assert_eq!(d.suffix, "");
+    }
+
+    #[test]
+    fn live_none_when_both_languages_dead_end() {
+        // "вф"/"da" — глухий кут і в uk, і в en → нічого (код/абревіатура; чекати межу).
+        let langs = [live_en_profile(), live_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_config_rules(&langs, "uk", live_cfg(2), &rules);
+        assert!(live_decide(&strokes(&DA), &ctx).is_none());
+    }
+
+    #[test]
+    fn live_none_when_current_is_live_prefix() {
+        // en-розкладка, "ad" — ЖИВИЙ en-префікс (ad/add) → ще не глухий кут → None.
+        let langs = [live_en_profile(), live_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_config_rules(&langs, "en", live_cfg(2), &rules);
+        assert!(live_decide(&strokes(&AD), &ctx).is_none());
+    }
+
+    #[test]
+    fn live_none_when_vetoed() {
+        // veto на цільове "ad" → не перемикати навіть при двосторонньому гейті.
+        let langs = [live_en_profile(), live_uk_profile()];
+        let mut rules = WordRules::new();
+        rules.veto_word("ad");
+        let ctx = ctx_with_config_rules(&langs, "uk", live_cfg(2), &rules);
+        assert!(live_decide(&strokes(&AD), &ctx).is_none());
+    }
+
+    #[test]
+    fn live_none_when_shorter_than_min_len() {
+        // live_min_len=3, буфер 2 страйки → закоротко → None.
+        let langs = [live_en_profile(), live_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_config_rules(&langs, "uk", live_cfg(3), &rules);
+        assert!(live_decide(&strokes(&AD), &ctx).is_none());
+    }
+
+    #[test]
+    fn live_none_when_flag_disabled() {
+        // Дефолт (live_switch_enabled=false) → шлях вимкнено, завжди None.
+        let langs = [live_en_profile(), live_uk_profile()];
+        let rules = WordRules::new();
+        let ctx = ctx_with_rules(&langs, "uk", &rules); // default config (off)
+        assert!(live_decide(&strokes(&AD), &ctx).is_none());
     }
 
     // --- Фонотактика («ь» на початку неможливе) + розширення файлів ------------

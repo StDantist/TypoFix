@@ -62,6 +62,16 @@ recall — за сумніву НЕ перемикати.**
 **Канонічні eval-числа (headline; інші секції посилаються сюди):** реальний
 корпус, 383 прикл. → **precision 100% (FP=0), recall 99.4%, F1 99.7%**.
 
+- **Перемикання НА ЛЬОТУ (`live_decide`, mid-word) — ОКРЕМИЙ ШЛЯХ, дефолт OFF.**
+  ЧИСТА `detector::live_decide` (етапи 1–2 готові: `Dictionary::has_prefix` +
+  поля `DetectorConfig{live_switch_enabled=false, live_min_len=3}`); рушій її ЩЕ НЕ
+  кличе (інтеграція — етап 3). Двосторонній гейт: поточна мова — глухий кут
+  (`!has_prefix` І `!recognizes`), інша — живий dict-префікс; veto/`best≠current`
+  поважаються. ⚠️ **eval СЛІПИЙ до live** (годує цілі слова в `decide`, оминаючи
+  буфер/`step`) → precision-гарантії headline на live НЕ поширюються; покриття —
+  лише юніти (`dict::has_prefix_*`, `detector::live_*`) + майбутній E2E virtual.
+  Тому дефолт OFF + ручне живе калібрування. Деталі — `docs/IMPLEMENTATION_LIVE_SWITCH.md`.
+
 ### Реєстр: ЩО НЕ ПЕРЕМИКАЄТЬСЯ
 
 - **Кома → «б» (репро власника):** клавіша `,` (0x33) — пунктуація в EN, літера

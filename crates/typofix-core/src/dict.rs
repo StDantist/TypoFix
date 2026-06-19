@@ -105,6 +105,43 @@ impl Dictionary {
         typo != lower && self.set.contains(&typo)
     }
 
+    /// Чи `prefix` — початок ХОЧ ОДНОГО слова у словнику (регістронезалежно,
+    /// апостроф-нормалізовано). Порожній префікс → `true` (початок будь-чого).
+    ///
+    /// **Для перемикання НА ЛЬОТУ** (`live_decide`): дозволяє питати «чи ця
+    /// послідовність ще може стати реальним словом», не чекаючи межі. Сире
+    /// проходження FST (`Set::as_fst`) від кореня по UTF-8-байтах: глухий кут
+    /// (`find_input → None`) → `false`; усі байти пройдено → живий префікс. Zero-alloc,
+    /// `is_final` не потрібен. Нормалізацію апострофа/регістру ДЗЕРКАЛИМО з
+    /// [`contains`](Self::contains) — інакше префікс із типографським `’` (U+2019)
+    /// промахнувся б повз VESUM-записи (ASCII `'` U+0027).
+    pub fn has_prefix(&self, prefix: &str) -> bool {
+        let lower = prefix.to_lowercase();
+        if self.has_prefix_raw(&lower) {
+            return true;
+        }
+        let ascii = normalize_apostrophes(&lower, '\u{0027}');
+        if ascii != lower && self.has_prefix_raw(&ascii) {
+            return true;
+        }
+        let typo = normalize_apostrophes(&lower, '\u{2019}');
+        typo != lower && self.has_prefix_raw(&typo)
+    }
+
+    /// Сире байтове проходження FST для одного канонічного варіанта префікса.
+    /// Порожній вхід → `true` (нуль байтів пройдено). Без алокацій.
+    fn has_prefix_raw(&self, prefix: &str) -> bool {
+        let fst = self.set.as_fst();
+        let mut node = fst.root();
+        for &b in prefix.as_bytes() {
+            match node.find_input(b) {
+                Some(i) => node = fst.node(node.transition(i).addr),
+                None => return false,
+            }
+        }
+        true
+    }
+
     /// Усі слова словника у відсортованому порядку (для тестів/дебагу).
     pub fn words(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(self.set.len());
@@ -159,6 +196,53 @@ mod tests {
 
         // Без апострофа поведінка незмінна.
         assert!(!ascii.contains("сімя"));
+    }
+
+    #[test]
+    fn has_prefix_walks_fst() {
+        let d = dict(); // привіт, світ, друже, hello, world
+                        // Живі префікси реальних слів.
+        assert!(d.has_prefix("прив"));
+        assert!(d.has_prefix("при"));
+        assert!(d.has_prefix("привіт")); // повне слово — теж префікс себе
+        assert!(d.has_prefix("сві")); // → світ
+        assert!(d.has_prefix("hel")); // en → hello
+                                      // Глухий кут: кирилична каша (двійник en у uk-розкладці) не починає слова.
+        assert!(!d.has_prefix("фв"));
+        assert!(!d.has_prefix("привх")); // розходиться після живого префікса
+        assert!(!d.has_prefix("qwe"));
+        // Порожній префікс → true.
+        assert!(d.has_prefix(""));
+    }
+
+    #[test]
+    fn has_prefix_en_word() {
+        // Окремий en-словник: "ad" — живий префікс (add/admin… тут просто слова).
+        let d = Dictionary::from_words(["ad", "advance", "order"]).unwrap();
+        assert!(d.has_prefix("ad"));
+        assert!(d.has_prefix("adv"));
+        assert!(!d.has_prefix("xy"));
+    }
+
+    #[test]
+    fn has_prefix_case_insensitive() {
+        let d = dict();
+        assert!(d.has_prefix("ПРИ")); // зводиться до нижнього регістру
+        assert!(d.has_prefix("HeL"));
+    }
+
+    #[test]
+    fn has_prefix_apostrophe_normalized() {
+        // Слово записане ASCII-апострофом U+0027 (як VESUM); префікс із
+        // типографським U+2019 (як генерує розкладка) має знаходитись.
+        let d = Dictionary::from_words(["сім'я", "комп'ютер"]).unwrap();
+        assert!(d.has_prefix("сім'"), "U+0027 префікс");
+        assert!(
+            d.has_prefix("сім’"),
+            "U+2019 префікс має матчити U+0027 запис"
+        );
+        assert!(d.has_prefix("комп’ю"), "U+2019 в середині префікса");
+        assert!(!d.has_prefix("сімя")); // без апострофа — інший шлях у FST
     }
 
     #[test]

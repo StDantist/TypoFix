@@ -124,10 +124,12 @@ const messages = {
     "hotkeys.action.case_upper": "Регістр: ВЕЛИКІ",
     "hotkeys.action.case_lower": "Регістр: малі",
     "hotkeys.action.case_sentence": "Регістр: Як речення",
+    "hotkeys.action.always_switch_word": "Завжди перемикати виділене слово",
+    "hotkeys.action.never_switch_word": "Ніколи не перемикати виділене слово",
     "hotkeys.accel.placeholder": "напр. Ctrl+Alt+P",
     "hotkeys.enabled.aria": "Увімкнути цей хоткей",
     "hotkeys.note":
-      "Дії з виділенням (регістр, ручне перемикання) працюють лише коли TypoFix активний (не на паузі).",
+      "Дії з виділенням (регістр, ручне перемикання, додавання слова у списки «завжди/ніколи перемикати») працюють лише коли TypoFix активний (не на паузі).",
 
     // Поведінка (B4)
     "section.behavior.title": "Поведінка",

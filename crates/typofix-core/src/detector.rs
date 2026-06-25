@@ -39,6 +39,35 @@ pub struct LanguageProfile {
     pub freq: Option<FrequencyMap>,
 }
 
+/// Перекласти `text` із розкладки `from` в ІНШУ розкладку активної пари
+/// (символ-у-символ через фізичні позиції клавіш), зберігаючи регістр.
+///
+/// **Навіщо (для src-tauri):** UI-хоткей «завжди перемикати» дає виділене слово
+/// таким, яким воно вийшло НЕПРАВИЛЬНО — крякозябри в ПОТОЧНІЙ розкладці (напр.
+/// `«фв»`, коли активна укр., а користувач хотів `«ad»`). Список `always_switch`
+/// → `force_switch` кейований на **ЦІЛЬ** (форму в ІНШІЙ розкладці, `is_force_switch_target`),
+/// тож зберігати треба саме `«ad»`, а не екранний двійник `«фв»`. Ця функція й
+/// робить той переклад: `flip_layout_text("фв", "uk", &profiles) == Some("ad")`.
+///
+/// `from` — id РОЗКЛАДКИ, в якій набрано/показано `text` (зазвичай
+/// `Context.current_layout`); `languages` — активна мовна пара (як `Context.languages`).
+/// «Інша» розкладка = перший профіль зі `languages`, чий `id != from`.
+///
+/// Повертає `None`, якщо профіль `from` не знайдено серед `languages` або в парі
+/// немає іншої розкладки. Символи, яких немає в розкладці `from` (пробіл/пунктуація
+/// поза мапою), переносяться як є (поведінка [`Layout::transliterate_to`]).
+///
+/// Чиста й детермінована: лише читає передані дані, без ОС/годинника/IO.
+pub fn flip_layout_text(
+    text: &str,
+    from: &LayoutId,
+    languages: &[LanguageProfile],
+) -> Option<String> {
+    let from_profile = languages.iter().find(|p| &p.id == from)?;
+    let other = languages.iter().find(|p| &p.id != from)?;
+    Some(from_profile.layout.transliterate_to(text, &other.layout))
+}
+
 /// Розкладений бал кандидата: повний (`total`) і **лише LM-складова** (`lm`).
 ///
 /// LM-складова потрібна окремо, бо для дуже коротких слів ми вимагаємо, щоб
@@ -2897,5 +2926,90 @@ mod tests {
             "прапорець extensions off → не перемикати (conf={:.2})",
             d.confidence
         );
+    }
+
+    // --- flip_layout_text (примітив для UI-хоткея «завжди перемикати») -------
+
+    /// Мінімальні профілі з клавішами `A=0x1E`/`D=0x20` (set 1), яких немає в
+    /// загальних `en_profile`/`uk_profile`, але саме вони дають пару `ф/в ↔ a/d`.
+    /// LM/dict тут не задіяні (flip — суто layout), тож тримаємо їх тривіальними.
+    fn flip_en_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("en"),
+            [
+                (0x1E, KeyCap::letter('a', 'A')),
+                (0x20, KeyCap::letter('d', 'D')),
+            ],
+        );
+        LanguageProfile {
+            id: LayoutId::new("en"),
+            layout,
+            lm: NgramModel::train("ad", 3, 0.5),
+            dict: Dictionary::from_words(["ad"]).unwrap(),
+            freq: None,
+        }
+    }
+
+    fn flip_uk_profile() -> LanguageProfile {
+        let layout = Layout::new(
+            LayoutId::new("uk"),
+            [
+                (0x1E, KeyCap::letter('ф', 'Ф')),
+                (0x20, KeyCap::letter('в', 'В')),
+            ],
+        );
+        LanguageProfile {
+            id: LayoutId::new("uk"),
+            layout,
+            lm: NgramModel::train("фв", 3, 0.5),
+            dict: Dictionary::from_words(["фв"]).unwrap(),
+            freq: None,
+        }
+    }
+
+    #[test]
+    fn flip_layout_text_uk_garble_to_en_target() {
+        // Користувач у УКР розкладці отримав крякозябри «фв», хотів «ad».
+        // src-tauri має зберегти ЦІЛЬ «ad» (force_switch target-keyed).
+        let langs = [flip_uk_profile(), flip_en_profile()];
+        assert_eq!(
+            flip_layout_text("фв", &LayoutId::new("uk"), &langs).as_deref(),
+            Some("ad")
+        );
+    }
+
+    #[test]
+    fn flip_layout_text_en_garble_to_uk_target() {
+        // Зворотний бік: у EN-розкладці «ad» → ціль «фв».
+        let langs = [flip_uk_profile(), flip_en_profile()];
+        assert_eq!(
+            flip_layout_text("ad", &LayoutId::new("en"), &langs).as_deref(),
+            Some("фв")
+        );
+    }
+
+    #[test]
+    fn flip_layout_text_preserves_case_per_char() {
+        // Регістр зберігається посимвольно (через SHIFT у зворотному індексі).
+        let langs = [flip_uk_profile(), flip_en_profile()];
+        // «Фв» (велика+мала) → «Ad»; зворотно «aD» → «фВ».
+        assert_eq!(
+            flip_layout_text("Фв", &LayoutId::new("uk"), &langs).as_deref(),
+            Some("Ad")
+        );
+        assert_eq!(
+            flip_layout_text("aD", &LayoutId::new("en"), &langs).as_deref(),
+            Some("фВ")
+        );
+    }
+
+    #[test]
+    fn flip_layout_text_none_when_layout_absent_or_no_pair() {
+        let langs = [flip_uk_profile(), flip_en_profile()];
+        // Невідома поточна розкладка → None.
+        assert_eq!(flip_layout_text("ad", &LayoutId::new("de"), &langs), None);
+        // Немає іншої розкладки в парі → None.
+        let solo = [flip_uk_profile()];
+        assert_eq!(flip_layout_text("фв", &LayoutId::new("uk"), &solo), None);
     }
 }

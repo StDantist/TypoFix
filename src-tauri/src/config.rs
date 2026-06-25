@@ -22,9 +22,10 @@ pub const SETTINGS_FILE: &str = "settings.json";
 
 /// Поточна версія схеми конфігу (для майбутніх міграцій).
 /// v2 додав секцію `hotkeys`, v3 — `behavior`, v4 — `feedback`, v5 — поле
-/// `behavior.live_switch` (бекворд-сумісно: відсутнє поле → дефолт через
+/// `behavior.live_switch`, v6 — два хоткеї `hotkeys.always_switch_word`/
+/// `never_switch_word` (бекворд-сумісно: відсутнє поле → дефолт через
 /// `serde(default)`).
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Мовна пара. Поки доступна лише uk↔en, але модель параметрична (enum) — щоб
 /// додати пару, треба ЛИШЕ дані + один варіант сюди (з його [`langs`](Self::langs)).
@@ -99,17 +100,26 @@ pub enum HotkeyAction {
     CaseLower,
     /// Перевести виділення у Регістр речення.
     CaseSentence,
+    /// Додати виділене слово у список «завжди перемикати» (`words.always_switch`).
+    /// Слово ПЕРЕКЛАДАЄТЬСЯ в іншу розкладку (бо `always_switch` зберігає вже
+    /// виправлену форму, target-keyed) — резолюція в потоці рушія.
+    AlwaysSwitchSelection,
+    /// Додати виділене слово у список «ніколи не перемикати» (`words.never_switch`).
+    /// Слово зберігається як виділено (veto матчить обидві сторони).
+    NeverSwitchSelection,
 }
 
 impl HotkeyAction {
     /// Усі дії в стабільному порядку (для ітерації при реєстрації/в UI).
-    pub const ALL: [HotkeyAction; 6] = [
+    pub const ALL: [HotkeyAction; 8] = [
         HotkeyAction::PauseResume,
         HotkeyAction::RevertLast,
         HotkeyAction::ManualSwitch,
         HotkeyAction::CaseUpper,
         HotkeyAction::CaseLower,
         HotkeyAction::CaseSentence,
+        HotkeyAction::AlwaysSwitchSelection,
+        HotkeyAction::NeverSwitchSelection,
     ];
 }
 
@@ -143,6 +153,10 @@ pub struct HotkeysDto {
     pub case_lower: HotkeyBinding,
     /// Регістр речення для виділення.
     pub case_sentence: HotkeyBinding,
+    /// Додати виділене слово у `words.always_switch` (із перекладом у іншу розкладку).
+    pub always_switch_word: HotkeyBinding,
+    /// Додати виділене слово у `words.never_switch` (як виділено).
+    pub never_switch_word: HotkeyBinding,
 }
 
 impl Default for HotkeysDto {
@@ -159,6 +173,8 @@ impl Default for HotkeysDto {
             case_upper: off("Ctrl+Alt+U"),
             case_lower: off("Ctrl+Alt+L"),
             case_sentence: off("Ctrl+Alt+E"),
+            always_switch_word: off("Ctrl+Alt+A"),
+            never_switch_word: off("Ctrl+Alt+N"),
         }
     }
 }
@@ -173,6 +189,8 @@ impl HotkeysDto {
             HotkeyAction::CaseUpper => &self.case_upper,
             HotkeyAction::CaseLower => &self.case_lower,
             HotkeyAction::CaseSentence => &self.case_sentence,
+            HotkeyAction::AlwaysSwitchSelection => &self.always_switch_word,
+            HotkeyAction::NeverSwitchSelection => &self.never_switch_word,
         }
     }
 
@@ -185,6 +203,8 @@ impl HotkeysDto {
             &mut self.case_upper,
             &mut self.case_lower,
             &mut self.case_sentence,
+            &mut self.always_switch_word,
+            &mut self.never_switch_word,
         ] {
             b.accelerator = b.accelerator.trim().to_string();
         }
@@ -560,6 +580,45 @@ mod tests {
         assert!(!s.behavior.fix_case);
         assert!(s.behavior.forex); // решта евристик — дефолт true
         assert!(!s.behavior.live_switch); // нове поле — дефолт false
+    }
+
+    #[test]
+    fn hotkeys_v5_json_without_new_actions_falls_back_to_defaults() {
+        // Старий v5 settings.json: секція hotkeys БЕЗ нових полів
+        // always_switch_word/never_switch_word (міграція v5→v6). Нові прив'язки
+        // мають читатися з дефолтів (Ctrl+Alt+A / Ctrl+Alt+N, вимкнені).
+        let partial = r#"{
+            "version": 5,
+            "hotkeys": {
+                "pause_resume": { "accelerator": "Ctrl+Alt+P", "enabled": true }
+            }
+        }"#;
+        let s: AppSettings = serde_json::from_str(partial).unwrap();
+        // Наявне поле читається як є.
+        assert!(s.hotkeys.pause_resume.enabled);
+        // Нові поля — дефолти (вимкнені, неконфліктні акселератори).
+        assert_eq!(s.hotkeys.always_switch_word.accelerator, "Ctrl+Alt+A");
+        assert!(!s.hotkeys.always_switch_word.enabled);
+        assert_eq!(s.hotkeys.never_switch_word.accelerator, "Ctrl+Alt+N");
+        assert!(!s.hotkeys.never_switch_word.enabled);
+        // Усі дії (вкл. нові) досяжні через binding(); жодна не ввімкнена, крім pause.
+        assert!(
+            !s.hotkeys
+                .binding(HotkeyAction::AlwaysSwitchSelection)
+                .enabled
+        );
+        assert!(
+            !s.hotkeys
+                .binding(HotkeyAction::NeverSwitchSelection)
+                .enabled
+        );
+    }
+
+    #[test]
+    fn schema_version_is_six() {
+        // Bump-замок: дефолтна версія схеми — 6 (нові хоткеї always/never switch word).
+        assert_eq!(SCHEMA_VERSION, 6);
+        assert_eq!(AppSettings::default().version, 6);
     }
 
     #[test]

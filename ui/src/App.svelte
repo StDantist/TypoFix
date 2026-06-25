@@ -28,7 +28,7 @@
   /** Дефолти-дзеркало бекенду (на випадок запуску поза Tauri / першого старту). */
   function defaultSettings() {
     return {
-      version: 5,
+      version: 6,
       enabled: true,
       language: "uk-en",
       exclusions: { process_names: [], exe_paths: [], folders: [] },
@@ -49,6 +49,8 @@
         case_upper: { accelerator: "Ctrl+Alt+U", enabled: false },
         case_lower: { accelerator: "Ctrl+Alt+L", enabled: false },
         case_sentence: { accelerator: "Ctrl+Alt+E", enabled: false },
+        always_switch_word: { accelerator: "Ctrl+Alt+A", enabled: false },
+        never_switch_word: { accelerator: "Ctrl+Alt+N", enabled: false },
       },
       detection: { min_word_len: 3, confidence_threshold: 0.75 },
     };
@@ -78,6 +80,8 @@
     "case_upper",
     "case_lower",
     "case_sentence",
+    "always_switch_word",
+    "never_switch_word",
   ];
 
   /** Зібрати рядок-акселератор Tauri з події клавіатури (`Ctrl+Alt+P`). */

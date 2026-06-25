@@ -25,6 +25,8 @@ import { open } from "@tauri-apps/plugin-dialog";
  * @property {HotkeyBinding} case_upper
  * @property {HotkeyBinding} case_lower
  * @property {HotkeyBinding} case_sentence
+ * @property {HotkeyBinding} always_switch_word
+ * @property {HotkeyBinding} never_switch_word
  *
  * @typedef {Object} Words
  * @property {string[]} always_switch

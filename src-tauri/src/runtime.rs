@@ -354,6 +354,20 @@ pub enum EngineCommand {
     ManualSwitch,
     /// Застосувати регістр до поточного виділення ОС.
     ApplyCase(CaseMode),
+    /// Додати виділене слово у список правил по слову. `to_always=true` →
+    /// `words.always_switch` (слово ПЕРЕКЛАДАЄТЬСЯ в іншу розкладку, бо список
+    /// target-keyed), `false` → `words.never_switch` (як виділено). Резолюція
+    /// (читання виділення + flip) — у потоці рушія (там platform+languages);
+    /// персист у settings.json — на app-боці (`crate::on_add_word_rule`).
+    AddSelectionWord { to_always: bool },
+}
+
+/// Витягти «слово-правило» з виділеного тексту: ПЕРШИЙ токен (до пробілу).
+/// Порожнє виділення / лише пробіли → `None`. Регістр і дедуп робить далі
+/// `AppSettings::sanitized` (lowercase) на боці персисту, тож тут лишаємо як є.
+/// Чисте → тестовно без хука.
+pub fn first_word(selection: &str) -> Option<String> {
+    selection.split_whitespace().next().map(str::to_string)
 }
 
 /// Керує життєвим циклом потоку рушія. Зберігається у Tauri-стані за `Mutex`.
@@ -511,7 +525,8 @@ fn engine_loop(
     use std::time::Duration;
 
     use typofix_core::{
-        force_switch_last, revert_last, step, transform_case, Action, Context, EngineState,
+        flip_layout_text, force_switch_last, revert_last, step, transform_case, Action, Context,
+        EngineState,
     };
     use typofix_platform::Platform;
     use typofix_platform_windows::{get_selection_text, WindowsPlatform};
@@ -591,6 +606,39 @@ fn engine_loop(
                         platform.apply(&Action::TypeUnicode(out));
                     }
                 }
+                continue;
+            }
+            Ok(EngineCommand::AddSelectionWord { to_always }) => {
+                // Приватність №4: у полі пароля нічого не читаємо й не зберігаємо.
+                if platform.is_secure_field() {
+                    continue;
+                }
+                // Виділення приходить ЗЗОВНІ (синтет. Ctrl+C), як в ApplyCase.
+                let Some(selection) = get_selection_text() else {
+                    continue;
+                };
+                let Some(word) = first_word(&selection) else {
+                    continue; // порожнє виділення — нічого додавати
+                };
+                // «always» зберігає вже ВИПРАВЛЕНУ форму (target-keyed force_switch):
+                // крякозябри в поточній розкладці (`фв`) треба ПЕРЕКЛАСТИ в іншу (`ad`)
+                // через core-примітив `flip_layout_text`. «never» (veto) зберігається
+                // як виділено — veto матчить обидві сторони.
+                let resolved = if to_always {
+                    match flip_layout_text(&word, &platform.current_layout(), &languages) {
+                        Some(flipped) => flipped,
+                        // Нема пари / поточної розкладки серед профілів → не зберігаємо.
+                        None => continue,
+                    }
+                } else {
+                    word
+                };
+                // Персист — на app-боці (AppState + диск), на головному потоці:
+                // settings.json правиться там, де живе AppState, не з потоку рушія.
+                let app2 = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    crate::on_add_word_rule(&app2, to_always, &resolved);
+                });
                 continue;
             }
             Err(TryRecvError::Empty) => {}
@@ -703,6 +751,19 @@ mod tests {
     }
 
     #[test]
+    fn first_word_extracts_leading_token_or_none() {
+        // Перший токен; провідні/хвостові пробіли ігноруються.
+        assert_eq!(first_word("привіт світ").as_deref(), Some("привіт"));
+        assert_eq!(first_word("  фв  ").as_deref(), Some("фв"));
+        assert_eq!(first_word("ad").as_deref(), Some("ad"));
+        // Регістр НЕ чіпаємо тут (lowercase робить sanitized на боці персисту).
+        assert_eq!(first_word("Вжух щось").as_deref(), Some("Вжух"));
+        // Порожнє / лише пробіли → None.
+        assert_eq!(first_word(""), None);
+        assert_eq!(first_word("   \t\n "), None);
+    }
+
+    #[test]
     fn send_command_without_engine_is_ignored() {
         // Без активного рушія (пауза/вимкнено) команди тихо ігноруються —
         // `send_command` повертає false, а не панікує/блокує. Крос-платформно
@@ -711,6 +772,8 @@ mod tests {
         assert!(!mgr.send_command(EngineCommand::RevertLast));
         assert!(!mgr.send_command(EngineCommand::ManualSwitch));
         assert!(!mgr.send_command(EngineCommand::ApplyCase(CaseMode::Sentence)));
+        assert!(!mgr.send_command(EngineCommand::AddSelectionWord { to_always: true }));
+        assert!(!mgr.send_command(EngineCommand::AddSelectionWord { to_always: false }));
     }
 
     #[test]

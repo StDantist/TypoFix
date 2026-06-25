@@ -26,7 +26,7 @@ pub mod undo;
 
 pub use buffer::{BufferStore, WordBuffer};
 pub use case::{transform_case, CaseMode};
-pub use detector::{Decision, DetectorConfig, LanguageProfile};
+pub use detector::{flip_layout_text, Decision, DetectorConfig, LanguageProfile};
 pub use dict::Dictionary;
 pub use exceptions::{ExclusionRules, LearnedExceptions};
 pub use freq::FrequencyMap;

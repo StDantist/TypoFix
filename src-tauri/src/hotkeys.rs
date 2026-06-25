@@ -109,6 +109,14 @@ fn route(app: &AppHandle, action: HotkeyAction) {
         HotkeyAction::CaseUpper => send(app, EngineCommand::ApplyCase(CaseMode::Upper)),
         HotkeyAction::CaseLower => send(app, EngineCommand::ApplyCase(CaseMode::Lower)),
         HotkeyAction::CaseSentence => send(app, EngineCommand::ApplyCase(CaseMode::Sentence)),
+        // Додати виділене слово у словник правил: резолюція (виділення + flip для
+        // «always») — у потоці рушія, бо там platform+languages; персист — на app-боці.
+        HotkeyAction::AlwaysSwitchSelection => {
+            send(app, EngineCommand::AddSelectionWord { to_always: true })
+        }
+        HotkeyAction::NeverSwitchSelection => {
+            send(app, EngineCommand::AddSelectionWord { to_always: false })
+        }
     }
 }
 

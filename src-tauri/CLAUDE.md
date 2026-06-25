@@ -95,6 +95,9 @@ npm --prefix ui install
   нормалізує слова в **lowercase** (+trim+dedup), бо матчинг у ядрі регістронезалежний.
   UI керує тими ж даними, що й `user.txt` (звір семантику: `always_switch` =
   позитив, як `user.txt`; обидва йдуть у `WordRules.recognized`).
+  **Хоткеї «додати виділене слово» (v6):** дві дії (`always_switch_word`/
+  `never_switch_word`, дефолти `Ctrl+Alt+A`/`Ctrl+Alt+N`, вимкнені) поповнюють
+  ці списки з виділення ОС. Проводка — нижче (секція хоткеїв).
 - **ПРИВАТНІСТЬ (залізне правило):** у конфіг ідуть ЛИШЕ налаштування. НІКОЛИ
   натиски/буфер/набраний текст — їх тут немає й не повинно бути.
 - **Власний DTO, НЕ типи `typofix-core`:** app-крейт у відокремленому workspace не
@@ -187,9 +190,13 @@ npm --prefix ui install
   дозволи додано про запас (якщо UI колись керуватиме напряму).
 - **DTO:** `HotkeysDto` в `AppSettings` (`config.rs`) — по `HotkeyBinding {accelerator, enabled}`
   на дію. Дії (`HotkeyAction::ALL`): `pause_resume`, `revert_last`, `manual_switch`,
-  `case_upper`, `case_lower`, `case_sentence`. **Усі дефолтно ВИМКНЕНІ**, акселератори
-  неконфліктні (`Ctrl+Alt+{P,Z,S,U,L,E}`). `serde(default)` → старий `settings.json`
-  без секції читається в дефолти (back-compat). `SCHEMA_VERSION` піднято 1→2.
+  `case_upper`, `case_lower`, `case_sentence`, `always_switch_word`, `never_switch_word`.
+  **Усі дефолтно ВИМКНЕНІ**, акселератори неконфліктні
+  (`Ctrl+Alt+{P,Z,S,U,L,E,A,N}`). `serde(default)` → старий `settings.json`
+  без секції читається в дефолти (back-compat). `SCHEMA_VERSION` піднято 1→2; **v6
+  додав `always_switch_word`/`never_switch_word`** (нові поля `HotkeysDto`, тож
+  v5-JSON без них вантажиться з дефолтами — тест
+  `hotkeys_v5_json_without_new_actions_falls_back_to_defaults`).
   `sanitized()` лише тримить акселератори (валідність формату перевіряє вже плагін
   при `Shortcut::from_str` — невалідний/зайнятий просто не активується, лог у stderr).
 - **`hotkeys::apply(app, settings)`:** зняти ВСІ (`unregister_all`) → поставити заново
@@ -200,14 +207,15 @@ npm --prefix ui install
   (кличеться й на Released). `PauseResume` → `crate::toggle_enabled` (`pub(crate)`;
   інверсія `enabled`, запис на диск, оновлення трею, емісія `settings:changed`) —
   НЕ через канал, бо пауза/відновлення мають працювати й коли рушій зупинено.
-  Решта дій (`RevertLast`/`ManualSwitch`/`CaseUpper|Lower|Sentence`) → команда в
-  потік рушія через `RuntimeManager::send_command` (див. нижче).
+  Решта дій (`RevertLast`/`ManualSwitch`/`CaseUpper|Lower|Sentence`/
+  `AlwaysSwitchSelection`/`NeverSwitchSelection`) → команда в потік рушія через
+  `RuntimeManager::send_command` (див. нижче).
 
 ### Командний канал рушія (`runtime.rs`) — НЕОЧЕВИДНЕ
 **Чому канал, а не прямий виклик core-API з хендлера:** рушій крутиться в ОКРЕМОМУ
 потоці (`engine_loop`) і ВОЛОДІЄ `EngineState` + `WindowsPlatform` (хуки/ввід).
 Хоткей-хендлер (потік Tauri) не має до них доступу й не сміє їх шарити між потоками.
-- `enum EngineCommand { RevertLast, ManualSwitch, ApplyCase(CaseMode) }` (крос-платформний).
+- `enum EngineCommand { RevertLast, ManualSwitch, ApplyCase(CaseMode), AddSelectionWord { to_always } }` (крос-платформний).
 - `start_engine` створює `mpsc::channel`; `EngineHandle` тримає `tx`, потік отримує `rx`.
 - `engine_loop` на КОЖНІЙ ітерації спершу **неблокуюче** поллить `cmd_rx.try_recv()`
   (пріоритет над input-подіями), виконує команду на СВОЇХ `state`+`platform`, далі
@@ -218,6 +226,19 @@ npm --prefix ui install
     `transform_case(&text, mode)`; якщо змінилось → `apply(TypeUnicode(out))` (друк
     поверх виділення замінює його; `DeleteChars` не потрібен — НЕ перевірено живцем
     у всіх полях, потенційна готча).
+  - `AddSelectionWord { to_always }` → **резолюція в рушії, персист в app**
+    (engine→app проводка). Рушій: пропуск, якщо `is_secure_field()` (приватність №4)
+    або порожнє виділення; `get_selection_text()` → `runtime::first_word` (перший
+    токен); для `to_always=true` — **flip у іншу розкладку** через core-примітив
+    `typofix_core::flip_layout_text(word, &current_layout, &languages)` (бо
+    `always_switch` target-keyed: крякозябри `фв` → ціль `ad`; `None`=нема пари →
+    skip), для `false` — слово як є (veto матчить обидві сторони). Далі —
+    `run_on_main_thread(|| crate::on_add_word_rule(app, to_always, &resolved))`
+    (дзеркалить `on_engine_layout`: settings.json правиться там, де живе `AppState`,
+    не з потоку рушія). **`on_add_word_rule`** (`lib.rs`, `pub(crate)`,
+    `cfg_attr(not(windows), allow(dead_code))`): push у відповідний список →
+    `sanitized()` (trim+lowercase+дедуп) → `save_to_disk` → `sync_runtime` (нові
+    force_switch/veto) → emit `settings:changed` (відкрите вікно оновить `RuleList`).
 - `RuntimeManager::send_command(cmd) -> bool`: `false`, якщо рушій НЕ запущено
   (пауза/`enabled=false`) → хоткей-дія тихо ігнорується (revert/manual/case без
   активного движка не мають сенсу). На не-Windows завжди `false` (заглушка).

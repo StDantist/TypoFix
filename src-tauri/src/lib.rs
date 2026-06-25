@@ -253,6 +253,38 @@ pub(crate) fn on_engine_layout(app: &AppHandle, lang: &str) {
     refresh_tray(app, enabled);
 }
 
+/// Колбек від рушія (на головному потоці через `run_on_main_thread`): додати
+/// виділене слово у список правил по слову — `words.always_switch` (`to_always=true`)
+/// або `words.never_switch`. Слово вже РЕЗОЛВЛЕНЕ потоком рушія (перший токен +
+/// flip для «always»); тут — ПЕРСИСТ: дедуп/нормалізація через `sanitized()`, запис
+/// на диск, синхрон рантайму (нові force_switch/veto) і емісія `settings:changed`
+/// (відкрите вікно одразу оновить список). `pub(crate)` — кличеться з
+/// `runtime::engine_loop` (лише Windows; на інших цілях рушій-потоку нема).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn on_add_word_rule(app: &AppHandle, to_always: bool, word: &str) {
+    let snapshot = {
+        let state = app.state::<AppState>();
+        let mut settings = state.settings.lock().expect("AppState отруєно");
+        if to_always {
+            settings.words.always_switch.push(word.to_string());
+        } else {
+            settings.words.never_switch.push(word.to_string());
+        }
+        // `sanitized()` нормалізує (trim+lowercase) і прибирає дублі в обох списках.
+        let cleaned = settings.clone().sanitized();
+        *settings = cleaned.clone();
+        cleaned
+    };
+    if let Err(err) = config::save_to_disk(app, &snapshot) {
+        eprintln!("TypoFix: не вдалося зберегти слово-правило: {err}");
+        return;
+    }
+    // Перебудувати рантайм-цикл під нові правила по слову (force_switch/veto).
+    sync_runtime(app, &snapshot);
+    // Сповіщаємо фронтенд (повним конфігом — вікно оновить RuleList).
+    let _ = app.emit(EVENT_SETTINGS_CHANGED, snapshot);
+}
+
 /// Зробити «приглушену» (паузну) копію іконки: знебарвити (grayscale) і зробити
 /// напівпрозорою — щоб стан паузи був візуально очевидним у треї.
 fn make_paused_icon(active: &Image<'_>) -> Image<'static> {

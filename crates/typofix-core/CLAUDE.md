@@ -58,6 +58,15 @@ recall — за сумніву НЕ перемикати.**
   veto і НЕ `best≠current`). Кейовано на ЦІЛЬ (саме слово, напр. `ad`/`us`), НЕ на
   екранний двійник. Стереже: `force_switch_*` (юніти `detector.rs`/`rules.rs`) +
   `tests/recall_force_switch.rs` (реальні моделі, `min_switch_len=3`).
+  **⚠️ ПОПОВНЕННЯ `always_switch` з UI-хоткея — зберігати TARGET-форму.** Хоткей
+  «завжди перемикати» дає виділене слово як крякозябри в ПОТОЧНІЙ розкладці (`фв`
+  при укр.); src-tauri МУСИТЬ зберегти у `always_switch` саме ЦІЛЬ (`ad`, форму в
+  ІНШІЙ розкладці пари), бо `force_switch` target-keyed (`is_force_switch_target`).
+  Переклад робить чистий примітив `typofix_core::flip_layout_text(text, &from_id,
+  &languages) -> Option<String>` (детектор; символ-у-символ через layout-мапу,
+  зберігає регістр). Це НЕ змінює, ЯКІ типи токенів ми перемикаємо (механізм
+  force_switch уже зареєстрований) → повний regression-suite не потрібен, лише
+  фокусний `flip_layout_text_*` (юніти `detector.rs`).
 
 **Канонічні eval-числа (headline; інші секції посилаються сюди):** реальний
 корпус, 383 прикл. → **precision 100% (FP=0), recall 99.4%, F1 99.7%**.

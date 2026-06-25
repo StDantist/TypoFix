@@ -596,6 +596,10 @@ fn engine_loop(
                 continue;
             }
             Ok(EngineCommand::ApplyCase(mode)) => {
+                // Приватність №4: у полі пароля нічого не читаємо й не чіпаємо.
+                if platform.is_secure_field() {
+                    continue;
+                }
                 // Виділення приходить ЗЗОВНІ (синтет. Ctrl+C), не з буфера натисків.
                 if let Some(text) = get_selection_text() {
                     let out = transform_case(&text, mode);
